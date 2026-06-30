@@ -1,0 +1,22 @@
+59:58] ✅  SUCCESS    ✅  Echo .hello preserved (expected "world", got "world")
+[15:59:58] ✅  SUCCESS    ✅  Echo .num preserved (expected 42, got 42)
+[15:59:58] ✅  SUCCESS    ✅  Large payload echoed intact (expected 10000, got 10000)
+[15:59:58] ℹ️  INFO  
+══ 7. Room join / leave / broadcast ══
+[15:59:58] 🐞  DEBUG  [WS] conn_1782651598036_ctrhct9d left all rooms: []
+[15:59:58] ℹ️  INFO  [WS] Connection closed: conn_1782651598036_ctrhct9d (code: 1000, reason: )
+[15:59:58] 🐞  DEBUG  [/echo] close: conn_1782651598036_ctrhct9d (1000 )
+[15:59:58] ℹ️  INFO  [WS] Connection opened: conn_1782651598054_lxnfoitx (IP: unknown)
+[15:59:58] 🐞  DEBUG  [WS] conn_1782651598054_lxnfoitx joined room: general
+[15:59:58] 🐞  DEBUG  [/chat] conn_1782651598054_lxnfoitx joined general
+[15:59:58] ℹ️  INFO  [WS] Connection opened: conn_1782651598057_3b63vvau (IP: unknown)
+[15:59:58] 🐞  DEBUG  [WS] conn_1782651598057_3b63vvau joined room: general
+[15:59:58] 🐞  DEBUG  [/chat] conn_1782651598057_3b63vvau joined general
+[16:00:00] ❌  ERROR  Unexpected test error: Error: msg timeout
+[16:00:00] ℹ️  INFO  
+══════════════════════════════════════════════════════
+[16:00:00] ✅  SUCCESS  Passed:  51
+[16:00:00] ⚠️  WARN  Skipped: 1
+[16:00:00] ❌  ERROR  Failed:  1
+[16:00:00] ℹ️  INFO  ══════════════════════════════════════════════════════
+pease@pease-ernest:~/Desktop/elysiajscppws-final$ 

@@ -1,0 +1,88 @@
+{
+  "name": "cppws",
+  "version": "1.0.0",
+  "description": "The fastest WebSocket library alive. Runtime-agnostic, high-performance WebSocket server powered by C++ (uWebSockets). Bring your framework — we run alongside it.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build:cpp": "cmake-js build",
+    "build:ts": "tsc && tsc-alias",
+    "build": "npm run build:cpp && npm run build:ts",
+    "build:release": "cmake-js build --release",
+    "prebuild": "node scripts/prebuild.js",
+    "install": "node scripts/postinstall.js",
+    "test": "vitest run",
+    "test:unit": "vitest run --dir tests/unit",
+    "test:integration": "vitest run --dir tests/integration",
+    "test:security": "vitest run --dir tests/security",
+    "test:stress": "vitest run --dir tests/stress",
+    "test:all": "vitest run",
+    "bench": "node benchmarks/throughput.js",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist build node_modules/.cache",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "websocket",
+    "ws",
+    "cpp",
+    "uwebsockets",
+    "real-time",
+    "bun",
+    "node",
+    "deno",
+    "runtime-agnostic",
+    "framework-agnostic",
+    "elysia",
+    "express",
+    "hono",
+    "fastify",
+    "cppws"
+  ],
+  "author": "Ernest Tech House",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ernest12287/cppws"
+  },
+  "dependencies": {
+    "ernest-logger": ">=2.0.0",
+    "node-addon-api": "^8.9.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.0",
+    "@types/node": "^20.11.0",
+    "cmake-js": "^7.3.0",
+    "elysia": "^1.1.0",
+    "ioredis": "^5.3.0",
+    "tsc-alias": "^1.8.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  },
+  "optionalDependencies": {
+    "@cppws/darwin-arm64": "1.0.0",
+    "@cppws/darwin-x64": "1.0.0",
+    "@cppws/linux-arm64-gnu": "1.0.0",
+    "@cppws/linux-arm64-musl": "1.0.0",
+    "@cppws/linux-x64-gnu": "1.0.0",
+    "@cppws/linux-x64-musl": "1.0.0",
+    "@cppws/win32-arm64-msvc": "1.0.0",
+    "@cppws/win32-x64-msvc": "1.0.0"
+  },
+  "files": [
+    "dist/",
+    "src/cpp/",
+    "CMakeLists.txt",
+    "scripts/",
+    "prebuilds/",
+    "README.md",
+    "LICENSE"
+  ]
+}

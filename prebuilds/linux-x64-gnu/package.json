@@ -1,0 +1,20 @@
+{
+  "name": "@elysiajscppws/linux-x64-gnu",
+  "version": "1.0.0",
+  "description": "Pre-built native binary for elysiajscppws",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "elysiajscppws_native.node"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ernest12287/elysiajscppws.git",
+    "directory": "prebuilds/linux-x64-gnu"
+  },
+  "license": "MIT"
+}

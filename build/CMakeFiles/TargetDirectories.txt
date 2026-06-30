@@ -1,0 +1,3 @@
+/home/pease/Desktop/elysiajscppws-final/build/CMakeFiles/cppws_native.dir
+/home/pease/Desktop/elysiajscppws-final/build/CMakeFiles/edit_cache.dir
+/home/pease/Desktop/elysiajscppws-final/build/CMakeFiles/rebuild_cache.dir

@@ -1,0 +1,12 @@
+# ninja log v5
+2	605	1782657436970042565	build.ninja	83f1b640aa032936
+9	6558	1782651500812913533	CMakeFiles/elysiajscppws_native.dir/src/cpp/binding.cpp.o	c724763d4ad447a8
+10	28466	1782651522718094820	CMakeFiles/elysiajscppws_native.dir/src/cpp/websocket_core.cpp.o	74653fbc25e4e3a9
+28466	29490	1782651523743115383	Release/elysiajscppws_native.node	c2acd36e5202539a
+133	886	1782657436970042565	build.ninja	83f1b640aa032936
+19	8721	1782657445751013902	CMakeFiles/cppws_native.dir/src/cpp/binding.cpp.o	c03784aba4ab8c2d
+20	23148	1782657460174970286	CMakeFiles/cppws_native.dir/src/cpp/websocket_core.cpp.o	2bb19939e1d31255
+23148	25053	1782657462075964853	Release/cppws_native.node	ecc1fcf90fa38b17
+209	6427	1782793067618440556	CMakeFiles/cppws_native.dir/src/cpp/binding.cpp.o	c03784aba4ab8c2d
+210	23537	1782793084724564686	CMakeFiles/cppws_native.dir/src/cpp/websocket_core.cpp.o	2bb19939e1d31255
+23537	26826	1782793088014588552	Release/cppws_native.node	ecc1fcf90fa38b17

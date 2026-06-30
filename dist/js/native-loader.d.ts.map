@@ -1,0 +1,1 @@
+{"version":3,"file":"native-loader.d.ts","sourceRoot":"","sources":["../../src/js/native-loader.ts"],"names":[],"mappings":"AAWA,KAAK,OAAO,GAAG,MAAM,GAAG,KAAK,GAAG,MAAM,CAAC;AAqTvC;;;GAGG;AACH,wBAAgB,UAAU,IAAI,MAAM,CAAC,MAAM,EAAE,CAAC,GAAG,IAAI,EAAE,GAAG,EAAE,KAAK,GAAG,CAAC,CASpE;AAED;;GAEG;AACH,wBAAgB,cAAc,IAAI,OAAO,CAExC;AAED;;GAEG;AACH,wBAAgB,UAAU,IAAI,OAAO,CAEpC"}
