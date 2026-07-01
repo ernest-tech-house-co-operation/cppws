@@ -56,6 +56,12 @@ struct DrainData {
     std::string connectionId;
 };
 
+// ── NEW: confirmation payload for JOIN_ROOM ──────────────────────────
+struct JoinConfirmData {
+    std::string connectionId;
+    std::string room;
+};
+
 // ══════════════════════════════════════════════════════════════════════
 //  Async operation queue  (JS thread → uWS thread)
 // ══════════════════════════════════════════════════════════════════════
@@ -248,6 +254,9 @@ public:
     // ── History ────────────────────────────────────────────────────
     Napi::Value getHistory(const Napi::CallbackInfo& info);
 
+    // ── NEW: set confirmation callback for join operations ────────
+    Napi::Value setOnJoinConfirmed(const Napi::CallbackInfo& info);
+
 private:
     // ── Server config ──────────────────────────────────────────────
     std::string host_               = "0.0.0.0";
@@ -262,17 +271,13 @@ private:
     size_t      highWaterMark_      = 1024 * 1024; // 1 MB
 
     // ── Runtime state ──────────────────────────────────────────────
-    // NOTE: std::atomic<bool> so running_.load() / store() are safe
-    // across the JS thread and the destructor without a data race.
     std::atomic<bool>   running_{false};
-    void*               app_   = nullptr; // heap-allocated NativeApp*
-    void*               async_ = nullptr; // uWS::Async* owned by runServer
-    void* listenSocket_ = nullptr; // us_listen_socket_t* owned by runServer
+    void*               app_   = nullptr;
+    void*               async_ = nullptr;
+    void*               listenSocket_ = nullptr;
     std::thread         wsThread_;
 
     // ── Socket registry  (socketMutex_ guards sockets_) ───────────
-    // uWS WebSocket pointers are only valid on the uWS thread; we store
-    // raw void* to avoid pulling the full uWS template types into the header.
     mutable std::shared_mutex                       socketMutex_;
     std::unordered_map<std::string, void*>          sockets_;
 
@@ -294,8 +299,10 @@ private:
     Napi::ThreadSafeFunction onMessageCallback_;
     Napi::ThreadSafeFunction onCloseCallback_;
     Napi::ThreadSafeFunction onDrainCallback_;
-    // onUpgradeCallback_ reserved for future auth hook — not yet wired
     Napi::ThreadSafeFunction onUpgradeCallback_;
+
+    // ── NEW: confirmation callback for joins ──────────────────────
+    Napi::ThreadSafeFunction onJoinConfirmedCallback_;
 
     // ── Async op queue  (JS thread enqueues, uWS thread drains) ───
     mutable std::mutex      pendingMutex_;
@@ -314,7 +321,6 @@ private:
                           const std::string& arg2);
     void        executePendingOperations();
     void        runServer();   // runs on wsThread_
-    
 };
 
 } // namespace elysiacppws

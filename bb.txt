@@ -1,22 +1,160 @@
-59:58] ✅  SUCCESS    ✅  Echo .hello preserved (expected "world", got "world")
-[15:59:58] ✅  SUCCESS    ✅  Echo .num preserved (expected 42, got 42)
-[15:59:58] ✅  SUCCESS    ✅  Large payload echoed intact (expected 10000, got 10000)
-[15:59:58] ℹ️  INFO  
+Two completely separate bugs — don't conflate them.
+
+**First hang (room-test.js, the original one):** that was the self-join deadlock — `process.exit()` called synchronously inside `onmessage`, forcing the destructor to `join()` the same uWS thread it was currently running on. Crash: `Resource deadlock avoided`. That one IS fixed — proof is right there in this run's log: the suite hit a failure, ran cleanup, printed the full summary (`Passed: 51, Failed: 1`), and didn't throw that error. Old behavior would've aborted before ever reaching the summary.
+
+**This run's failure (`message timeout` in section 7):** brand new, different bug — the join/subscribe race I just explained. JS sends the "joined" ack before the C++ uWS thread has actually finished `ws->subscribe()`, so the broadcast that follows can miss the just-joined socket. Not a hang, not a deadlock — just a test assertion that legitimately timed out waiting for a message that never arrived because of the race. The suite handled it correctly (caught it, didn't hang) and still finished cleanly.
+
+**The thing you should actually be worried about** is the very last line: `terminate called without an active exception`, followed by the process refusing to die on Ctrl-C. That's new and that's the real "hanging" symptom right now. It's happening after `process.exit(failed > 0 ? 1 : 0)` runs — Node/Bun starts tearing down, but a native addon static destructor or atexit handler is throwing/aborting during that teardown, and something is left holding the process open so SIGINT isn't killing it.
+
+So: three separate things, two fixed, one new.
+1. ~~Self-join deadlock~~ — fixed.
+2. Room join/broadcast race — new, test logic issue, not a crash.
+3. `terminate called without an active exception` + un-killable process — new, and this is the one that needs real attention next.
+
+Want me to dig into #3? I'd want to see if your `~WebSocketServer()` or any global/static native object is still running cleanup logic after `process.exit()` is called — that abort pattern usually means a second teardown path (atexit or static dtor) is hitting the addon after your own `stop()`/destructor already ran.
+
+The hang/timeout is a race condition, not a deadlock this time. Here's what's happening:
+
+`ctx.join(room)` → `RoomManager.join()` → `native.joinRoom()` doesn't subscribe the socket immediately. It calls `enqueueOp(JOIN_ROOM, ...)`, which pushes onto a queue and wakes the uWS thread via `Loop::defer()`. The actual `ws->subscribe(topic)` only happens later, when the uWS thread drains that queue on its next loop tick.
+
+But right after enqueueing, your JS handler does `ctx.send(JSON.stringify({ event: 'joined', room }))` — that ack goes out **immediately**, synchronously, with no wait for the uWS thread to actually finish the subscribe.
+
+Your test trusts that ack: it awaits `{event:'joined'}` then immediately fires the broadcast. So the sequence on a real native run is:
+
+1. c2 sends `join` 
+2. JS enqueues JOIN_ROOM, immediately sends "joined" ack
+3. Test sees "joined", immediately tells c1 to broadcast
+4. c1's broadcast (`BROADCAST_TO_ROOM`) gets enqueued and may get processed by the uWS thread *before* c2's JOIN_ROOM op if timing is unlucky — or even if processed after, `app->publish()` only reaches sockets that have *already* called `subscribe()`, and that hasn't happened yet at the moment of publish if the two ops land in the same drain batch in the wrong order relative to when the publish actually executes.
+
+With the JS mock this never showed up because the mock's `joinRoom`/`broadcastToRoom` are plain synchronous functions — no thread hop, no race. With real C++, the ack is a lie: "joined" only means "JS handed off the join request," not "uWS finished subscribing."
+
+Two fixes, pick based on how serious you want to be about correctness:
+
+**Quick test-side fix** — add a tiny delay after the join ack before broadcasting:
+```ts
+await nextMessage(c1);
+await nextMessage(c2);
+await new Promise(r => setTimeout(r, 50)); // let uWS thread actually subscribe
+```
+
+**Real fix (recommended)** — don't send the "joined" ack from JS until the native layer confirms the subscribe actually happened. That means `joinRoom` in the C++ layer needs to report back through a callback/TSFN once `ws->subscribe()` executes, and your JS `ctx.join()` should only resolve/ack after that round trip — not synchronously. Right now `join()` is fire-and-forget from JS's perspective even though the actual effect lands on a different thread asynchronously.
+
+Want me to spec out the C++ + JS changes for the confirmed-join round trip, or just patch the test for now to unblock you?
+
+error
+ease@pease-ernest:~/Desktop/elysiajscppws-final/tests/integration$ cd /home/pease/Desktop/elysiajscppws-final
+bun run tests/integration/testmain.ts 
+[20:41:45] ℹ️  INFO  ╔══════════════════════════════════════════════════════╗
+[20:41:45] ℹ️  INFO  ║           cppws integration test suite               ║
+[20:41:45] ℹ️  INFO  ╚══════════════════════════════════════════════════════╝
+[20:41:45] ℹ️  INFO  
+══ 1. Native loader & runtime detection ══
+[20:41:45] ℹ️  INFO  [native-loader] Detected runtime: bun
+[20:41:45] ✅  SUCCESS  [native-loader] Instantiated WebSocketServer from build/Release
+[20:41:45] ✅  SUCCESS    ✅  loadNative() returns an object
+[20:41:45] ✅  SUCCESS    ✅  loadNative() returns cached singleton
+[20:41:45] ℹ️  INFO    ℹ️  isNativeLoaded() = true (running C++ addon)
+[20:41:45] ✅  SUCCESS    ✅  native.configure is a function
+[20:41:45] ✅  SUCCESS    ✅  native.start is a function
+[20:41:45] ✅  SUCCESS    ✅  native.stop is a function
+[20:41:45] ✅  SUCCESS    ✅  native.isRunning is a function
+[20:41:45] ✅  SUCCESS    ✅  native.joinRoom is a function
+[20:41:45] ✅  SUCCESS    ✅  native.leaveRoom is a function
+[20:41:45] ✅  SUCCESS    ✅  native.broadcastToRoom is a function
+[20:41:45] ✅  SUCCESS    ✅  native.getRoomInfo is a function
+[20:41:45] ✅  SUCCESS    ✅  native.sendToConnection is a function
+[20:41:45] ✅  SUCCESS    ✅  native.sendToUser is a function
+[20:41:45] ✅  SUCCESS    ✅  native.disconnect is a function
+[20:41:45] ✅  SUCCESS    ✅  native.getConnectionCount is a function
+[20:41:45] ✅  SUCCESS    ✅  native.getConnectionInfo is a function
+[20:41:45] ✅  SUCCESS    ✅  native.getMetrics is a function
+[20:41:45] ✅  SUCCESS    ✅  native.getHistory is a function
+[20:41:45] ℹ️  INFO  
+══ 2. JS mock unit tests (no network) ══
+[20:41:45] ✅  SUCCESS    ✅  configure() returns truthy
+[20:41:45] ✅  SUCCESS    ✅  isRunning() = false before start
+[20:41:45] ✅  SUCCESS    ✅  isRunning() = true after start
+[20:41:45] ✅  SUCCESS    ✅  isRunning() = false after stop
+[20:41:45] ✅  SUCCESS    ✅  getMetrics().totalConnections is a number
+[20:41:45] ✅  SUCCESS    ✅  getMetrics().activeConnections is a number
+[20:41:45] ✅  SUCCESS    ✅  getMetrics().totalMessagesReceived is a number
+[20:41:45] ✅  SUCCESS    ✅  getMetrics().totalMessagesSent is a number
+[20:41:45] ✅  SUCCESS    ✅  getMetrics().droppedMessages is a number
+[20:41:45] ✅  SUCCESS    ✅  getMetrics().rejectedConnections is a number
+[20:41:45] ✅  SUCCESS    ✅  getMetrics().uptimeMs is a number
+[20:41:45] ⚠️  WARN    ⏭   SKIP: _mockAddConnection not available on real C++ addon — skipping mock-only tests
+[20:41:45] ℹ️  INFO  
+══ 3. JS-layer unit tests ══
+[20:41:45] 🐞  DEBUG  Connection c1 joined room: general
+[20:41:45] 🐞  DEBUG  Connection c2 joined room: general
+[20:41:45] 🐞  DEBUG  Connection c1 joined room: vip
+[20:41:45] ✅  SUCCESS    ✅  RoomManager: general has 2 members (expected 2, got 2)
+[20:41:45] ✅  SUCCESS    ✅  RoomManager: vip has 1 member (expected 1, got 1)
+[20:41:45] ✅  SUCCESS    ✅  RoomManager: c1 in general
+[20:41:45] ✅  SUCCESS    ✅  RoomManager: c2 in general
+[20:41:45] 🐞  DEBUG  Connection c1 left room: general
+[20:41:45] ✅  SUCCESS    ✅  RoomManager: general has 1 member after leave (expected 1, got 1)
+[20:41:45] 🐞  DEBUG  Connection c1 joined room: general
+[20:41:45] 🐞  DEBUG  RoomManager destroyed
+[20:41:45] ✅  SUCCESS    ✅  MetricsCollector: not active before start
+[20:41:45] 🐞  DEBUG  Metrics collector started (interval: 50ms)
+[20:41:45] ✅  SUCCESS    ✅  MetricsCollector: active after start
+[20:41:45] ✅  SUCCESS    ✅  MetricsCollector callback: totalConnections
+[20:41:45] ✅  SUCCESS    ✅  MetricsCollector callback: messagesPerSecond
+[20:41:45] ✅  SUCCESS    ✅  MetricsCollector callback: activeConnections
+[20:41:45] ✅  SUCCESS    ✅  MetricsCollector callback: slowClients
+[20:41:45] ✅  SUCCESS    ✅  MetricsCollector: callback fires within 300ms
+[20:41:45] 🐞  DEBUG  Metrics collector stopped
+[20:41:45] ✅  SUCCESS    ✅  MetricsCollector: not active after stop
+[20:41:45] ✅  SUCCESS    ✅  MetricsCollector.snapshot() returns uptimeMs
+[20:41:45] ℹ️  INFO  
+══ 4. Starting cppws standalone server ══
+[20:41:45] 🐞  DEBUG  MessageBatcher started (maxBatch: 10, interval: 5ms)
+[20:41:45] 🐞  DEBUG  Metrics collector started (interval: 1000ms)
+[20:41:45] ✅  SUCCESS  WebSocket server started on 0.0.0.0:7331 (native: C++)
+[20:41:46] ✅  SUCCESS  cppws test server listening on :7331
+[20:41:46] ℹ️  INFO  
+══ 5. Connection lifecycle (open / close) ══
+[20:41:46] ℹ️  INFO  [WS] Connection opened: 4392606-23ebbced9669c7ac (IP: 127.0.0.1)
+[20:41:46] 🐞  DEBUG  [echo] open: 4392606-23ebbced9669c7ac
+[20:41:46] ✅  SUCCESS    ✅  WebSocket opens successfully
+[20:41:46] ✅  SUCCESS    ✅  Server sends "connected" event on open (expected "connected", got "connected")
+[20:41:46] ✅  SUCCESS    ✅  welcome.id is a non-empty string
+[20:41:46] ✅  SUCCESS    ✅  WebSocket closes cleanly
+[20:41:46] ℹ️  INFO  
+══ 6. Echo / sendToConnection ══
+[20:41:46] 🐞  DEBUG  [WS] 4392606-23ebbced9669c7ac left all rooms: []
+[20:41:46] ℹ️  INFO  [WS] Connection closed: 4392606-23ebbced9669c7ac (code: 1000, reason: )
+[20:41:46] 🐞  DEBUG  [server] close: 4392606-23ebbced9669c7ac (1000)
+[20:41:46] ℹ️  INFO  [WS] Connection opened: 4392623-5e880f9b020e3970 (IP: 127.0.0.1)
+[20:41:46] 🐞  DEBUG  [echo] open: 4392623-5e880f9b020e3970
+[20:41:46] ✅  SUCCESS    ✅  Echo reply received
+[20:41:46] ✅  SUCCESS    ✅  Reply has .echo object
+[20:41:46] ✅  SUCCESS    ✅  Echo .hello preserved (expected "world", got "world")
+[20:41:46] ✅  SUCCESS    ✅  Echo .num preserved (expected 42, got 42)
+[20:41:46] ✅  SUCCESS    ✅  Large payload echoed intact (expected 10000, got 10000)
+[20:41:46] ℹ️  INFO  
 ══ 7. Room join / leave / broadcast ══
-[15:59:58] 🐞  DEBUG  [WS] conn_1782651598036_ctrhct9d left all rooms: []
-[15:59:58] ℹ️  INFO  [WS] Connection closed: conn_1782651598036_ctrhct9d (code: 1000, reason: )
-[15:59:58] 🐞  DEBUG  [/echo] close: conn_1782651598036_ctrhct9d (1000 )
-[15:59:58] ℹ️  INFO  [WS] Connection opened: conn_1782651598054_lxnfoitx (IP: unknown)
-[15:59:58] 🐞  DEBUG  [WS] conn_1782651598054_lxnfoitx joined room: general
-[15:59:58] 🐞  DEBUG  [/chat] conn_1782651598054_lxnfoitx joined general
-[15:59:58] ℹ️  INFO  [WS] Connection opened: conn_1782651598057_3b63vvau (IP: unknown)
-[15:59:58] 🐞  DEBUG  [WS] conn_1782651598057_3b63vvau joined room: general
-[15:59:58] 🐞  DEBUG  [/chat] conn_1782651598057_3b63vvau joined general
-[16:00:00] ❌  ERROR  Unexpected test error: Error: msg timeout
-[16:00:00] ℹ️  INFO  
+[20:41:46] 🐞  DEBUG  [WS] 4392623-5e880f9b020e3970 left all rooms: []
+[20:41:46] ℹ️  INFO  [WS] Connection closed: 4392623-5e880f9b020e3970 (code: 1000, reason: )
+[20:41:46] 🐞  DEBUG  [server] close: 4392623-5e880f9b020e3970 (1000)
+[20:41:46] ℹ️  INFO  [WS] Connection opened: 4392636-be76f7dddfee39a1 (IP: 127.0.0.1)
+[20:41:46] 🐞  DEBUG  [echo] open: 4392636-be76f7dddfee39a1
+[20:41:46] ℹ️  INFO  [WS] Connection opened: 4392637-5d6dcbfa1a5a508d (IP: 127.0.0.1)
+[20:41:46] 🐞  DEBUG  [echo] open: 4392637-5d6dcbfa1a5a508d
+[20:41:48] ❌  ERROR  Unexpected test error: Error: message timeout
+[20:41:48] 🐞  DEBUG  MessageBatcher stopped
+[20:41:48] 🐞  DEBUG  Metrics collector stopped
+[20:41:48] ℹ️  INFO  [WS] 4392636-be76f7dddfee39a1 closed (code: 1001, reason: Server shutting down)
+[20:41:48] ℹ️  INFO  [WS] 4392637-5d6dcbfa1a5a508d closed (code: 1001, reason: Server shutting down)
+[20:41:48] ℹ️  INFO  WebSocket server shut down gracefully
+[20:41:48] ℹ️  INFO  
 ══════════════════════════════════════════════════════
-[16:00:00] ✅  SUCCESS  Passed:  51
-[16:00:00] ⚠️  WARN  Skipped: 1
-[16:00:00] ❌  ERROR  Failed:  1
-[16:00:00] ℹ️  INFO  ══════════════════════════════════════════════════════
+[20:41:48] ✅  SUCCESS  Passed:  51
+[20:41:48] ⚠️  WARN  Skipped: 1
+[20:41:48] ❌  ERROR  Failed:  1
+[20:41:48] ℹ️  INFO  ══════════════════════════════════════════════════════
+terminate called without an active exception
+^C^Cc^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^C^CAborted (core dumped)
 pease@pease-ernest:~/Desktop/elysiajscppws-final$ 
+

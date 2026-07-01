@@ -3,3 +3,56 @@ package-lock.json
 build
 deps
 node_modules
+# ── Dependencies ──────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+
+# ── Bun ───────────────────────────────────────
+bun.lockb
+
+# ── Build output ──────────────────────────────
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# ── Native addon (CMake / node-gyp / prebuildify) ─
+build/Release/
+build/Debug/
+prebuilds/
+*.node
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+.cmake-js/
+
+# ── Logs ──────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Env / secrets ─────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Editor / OS ────────────────────────────────
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ── Test / coverage ────────────────────────────
+coverage/
+.nyc_output/
+
+# ── Misc ───────────────────────────────────────
+*.tgz
+.cache/
+tmp/

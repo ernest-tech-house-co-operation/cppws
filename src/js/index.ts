@@ -51,16 +51,6 @@ export { loadNative, isNativeLoaded } from './native-loader.js';
 
 /**
  * Standalone WebSocket server backed by a native C++ uWebSockets core.
- *
- * cppws owns the sockets — no Bun/Node/Deno transport API is used.
- * Every runtime receives identical behaviour.
- *
- * Usage:
- *   const server = new WebSocketServer({ port: 3001, rooms: true })
- *   server.onOpen(ctx => ctx.join('general'))
- *   server.onMessage((ctx, data) => ctx.to('general').send(data))
- *   server.onClose((ctx, code) => console.log('closed', code))
- *   server.start()
  */
 export class WebSocketServer extends TypedEmitter<ServerEvents> {
     private native: ReturnType<typeof loadNative>;
@@ -114,8 +104,6 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
         }
 
         // Wire C++ TSFN callbacks → JS handlers
-        // These are called by the C++ background thread via ThreadSafeFunction
-        // whenever a connection opens, a message arrives, or a connection closes.
         this.wireNativeCallbacks();
     }
 
@@ -143,10 +131,6 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
 
     // ── Server start / stop ───────────────────────────────────
 
-    /**
-     * Start the C++ uWebSockets server.
-     * The server listens on the port specified in options (default 3001).
-     */
     start(): this {
         const host = this.options.host ?? '0.0.0.0';
         const port = this.options.port ?? 3001;
@@ -154,9 +138,6 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
         return this;
     }
 
-    /**
-     * Internal initializer — separated so tests can call it directly.
-     */
     initialize(host: string, port: number, tls?: { cert: string; key: string }): void {
         if (this.started) return;
 
@@ -201,9 +182,20 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
             config.keyPath    = tls.key;
         }
 
+        // ── Step 1: configure and start the native server ──
         this.native.configure(config);
         this.native.start();
         this.started = true;
+
+        // ── Step 2: wire join confirmation AFTER configure() ──
+        // This prevents registerCallbacks() from releasing it.
+        if (typeof (this.native as any).setOnJoinConfirmed === 'function') {
+            (this.native as any).setOnJoinConfirmed(
+                ({ connectionId, room }: { connectionId: string; room: string }) => {
+                    this.roomManager._handleJoinConfirm(connectionId, room);
+                }
+            );
+        }
 
         this.messageBatcher?.start();
         this.metricsCollector.start();
@@ -215,9 +207,6 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
         this.emit('serverStarted', { host, port });
     }
 
-    /**
-     * Gracefully shut down the server.
-     */
     async shutdown(): Promise<void> {
         if (!this.started) return;
         this.started = false;
@@ -226,6 +215,9 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
         this.metricsCollector.stop();
         this.rateLimiter?.destroy();
         this.connectionThrottler?.destroy();
+
+        // Flush all pending joins and clean up RoomManager
+        this.roomManager.destroy();
 
         for (const [, ctx] of this.connections) {
             try { ctx.close(1001, 'Server shutting down'); } catch { /* already closed */ }
@@ -242,22 +234,15 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
         this.emit('serverStopped', { reason: 'graceful_shutdown' });
     }
 
-    // ── Native callback handlers (called from C++ via TSFN) ──
+    // ── Native callback handlers ──────────────────────────────
 
-    /**
-     * Called by C++ when a new WebSocket connection is fully open.
-     * At this point the C++ layer owns the socket — we just create
-     * the JS-side context and call the user's open handler.
-     */
     private handleNativeOpen(connectionId: string, ip: string, _path: string): void {
-        // Connection throttling (JS-side double-check)
         if (this.connectionThrottler && !this.connectionThrottler.allow(ip)) {
             logger.security(`Connection rejected from ${ip}: too many connections`);
             this.native.disconnect(connectionId);
             return;
         }
 
-        // Build WSContext — all transport calls go to native directly
         const wsCtx = createWSContext(connectionId, ip, this.native, this.options, this.roomManager);
         this.connections.set(connectionId, wsCtx);
 
@@ -265,7 +250,6 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
         this.emit('connection', { connectionId, ip });
         logger.info(`[WS] Connection opened: ${connectionId} (IP: ${ip})`);
 
-        // Call user open handler
         if (this._openHandler) {
             Promise.resolve(this._openHandler(wsCtx)).catch(err => {
                 logger.error(`Error in open handler: ${err}`);
@@ -273,16 +257,12 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
         }
     }
 
-    /**
-     * Called by C++ when a message arrives from a connection.
-     */
     private handleNativeMessage(connectionId: string, rawData: string): void {
         const ctx = this.connections.get(connectionId);
         if (!ctx) return;
 
         const dataBytes = Buffer.byteLength(rawData);
 
-        // JS-side rate limiting
         if (this.rateLimiter && !this.rateLimiter.check(connectionId, dataBytes)) {
             this.eventBus.emit('rateLimitHit', {
                 connectionId,
@@ -297,18 +277,19 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
         this.emit('message', { connectionId, data: parsed });
 
         if (this._messageHandler) {
+            // Await the handler so ctx.join() can wait for confirmation
             Promise.resolve(this._messageHandler(ctx, parsed)).catch(err => {
                 logger.error(`Error in message handler: ${err}`);
             });
         }
     }
 
-    /**
-     * Called by C++ when a connection closes.
-     */
     private handleNativeClose(connectionId: string, code: number, reason: string): void {
         const ctx = this.connections.get(connectionId);
         if (!ctx) return;
+
+        // ── Clean up any pending joins for this connection ──────
+        this.roomManager.cancelPendingJoins(connectionId);
 
         ctx.leaveAll();
         this.connections.delete(connectionId);
@@ -326,9 +307,6 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
         }
     }
 
-    /**
-     * Called by C++ when backpressure drains on a connection.
-     */
     private handleNativeDrain(connectionId: string): void {
         const ctx = this.connections.get(connectionId);
         if (!ctx) return;
@@ -340,17 +318,9 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
         }
     }
 
-    // ── Wire callbacks into native configure ──────────────────
-
-    /**
-     * Called once in the constructor to set up TSFN callbacks.
-     * The callbacks are passed again in initialize() with the full config,
-     * but we set them here too so the mock works in tests without calling start().
-     */
+    // ── Wire callbacks (no‑op now – setOnJoinConfirmed is wired after configure) ──
     private wireNativeCallbacks(): void {
-        // No-op for now: callbacks are wired inside initialize() via configure().
-        // If the JS mock needs them earlier (unit tests), they're set via configure()
-        // when the test calls native.configure() manually.
+        // Nothing to do here – the confirmation callback is set in initialize() after configure.
     }
 
     // ── Public API ────────────────────────────────────────────
@@ -393,8 +363,6 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
         return this.eventBus;
     }
 
-    // ── Auth helper (used by http upgrade hooks if needed) ────
-
     async authenticateUpgrade(
         headers: Record<string, string>,
         query: Record<string, string>,
@@ -417,26 +385,6 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
 
 // ── Plugin / Factory function ─────────────────────────────────
 
-/**
- * Create a cppws WebSocket server instance.
- *
- * Returns a WebSocketServer — call .onOpen(), .onMessage(), .onClose(),
- * then .start() to launch the C++ uWebSockets server.
- *
- * Works alongside ANY HTTP framework (Elysia, Express, Hono, Fastify…)
- * or completely standalone. Runtime agnostic: Bun, Node.js, Deno.
- *
- * @example
- * ```typescript
- * import { ws } from 'cppws'
- *
- * ws({ port: 3001, rooms: true })
- *   .onOpen(ctx => ctx.join('general'))
- *   .onMessage((ctx, data) => ctx.to('general').send(data))
- *   .onClose((ctx, code) => console.log('closed', code))
- *   .start()
- * ```
- */
 export function ws<T extends Record<string, any> = Record<string, any>>(
     options: WSOptions<T> = {}
 ): WebSocketServer {

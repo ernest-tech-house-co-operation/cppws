@@ -382,6 +382,19 @@ void callDrainTSFN(Napi::ThreadSafeFunction& tsfn, DrainData* d) {
     });
 }
 
+// ── NEW: helper for JOIN confirmation ────────────────────────────────
+void callJoinConfirmTSFN(Napi::ThreadSafeFunction& tsfn, JoinConfirmData* d) {
+    if (!tsfn) { delete d; return; }
+    tsfn.NonBlockingCall(d, [](Napi::Env env, Napi::Function cb, JoinConfirmData* data) {
+        if (!env || !cb) { delete data; return; }
+        Napi::Object obj = Napi::Object::New(env);
+        obj.Set("connectionId", Napi::String::New(env, data->connectionId));
+        obj.Set("room",         Napi::String::New(env, data->room));
+        cb.Call({obj});
+        delete data;
+    });
+}
+
 } // anonymous namespace
 
 // ══════════════════════════════════════════════════════════════════════
@@ -405,6 +418,7 @@ Napi::Object WebSocketServer::Init(Napi::Env env, Napi::Object exports) {
         InstanceMethod("getMetrics",        &WebSocketServer::getMetrics),
         InstanceMethod("configure",         &WebSocketServer::configure),
         InstanceMethod("getHistory",        &WebSocketServer::getHistory),
+        InstanceMethod("setOnJoinConfirmed", &WebSocketServer::setOnJoinConfirmed), // NEW
     });
 
     Napi::FunctionReference* ctor = new Napi::FunctionReference();
@@ -420,7 +434,7 @@ Napi::Object WebSocketServer::Init(Napi::Env env, Napi::Object exports) {
 WebSocketServer::WebSocketServer(const Napi::CallbackInfo& info)
     : Napi::ObjectWrap<WebSocketServer>(info)
     , port_(3000)
-    , stopped_(false)   // explicit init (header has `= false`, but safe)
+    , stopped_(false)
 {
 
     if (info.Length() > 0 && info[0].IsObject()) {
@@ -444,7 +458,6 @@ WebSocketServer::WebSocketServer(const Napi::CallbackInfo& info)
 
 WebSocketServer::~WebSocketServer() {
     std::lock_guard<std::mutex> lock(stopMutex_);
-    // Only perform shutdown/join if not already stopped and the server is running.
     if (!stopped_.exchange(true) && running_) {
         running_ = false;
         enqueueOp(OpType::SHUTDOWN, "", "");
@@ -452,10 +465,11 @@ WebSocketServer::~WebSocketServer() {
     }
 
     // Release TSFNs (safe even if stop() already released them)
-    if (onOpenCallback_)    { onOpenCallback_.Release();    }
-    if (onMessageCallback_) { onMessageCallback_.Release(); }
-    if (onCloseCallback_)   { onCloseCallback_.Release();   }
-    if (onDrainCallback_)   { onDrainCallback_.Release();   }
+    if (onOpenCallback_)          { onOpenCallback_.Release();          }
+    if (onMessageCallback_)       { onMessageCallback_.Release();       }
+    if (onCloseCallback_)         { onCloseCallback_.Release();         }
+    if (onDrainCallback_)         { onDrainCallback_.Release();         }
+    if (onJoinConfirmedCallback_) { onJoinConfirmedCallback_.Release(); } // NEW
 }
 
 // ── Connection ID generation ─────────────────────────────────────────
@@ -479,47 +493,34 @@ void WebSocketServer::registerCallbacks(const Napi::CallbackInfo& info) {
 
     auto makeTSFN = [&](const char* name) -> Napi::ThreadSafeFunction {
         if (!opts.Has(name) || !opts.Get(name).IsFunction()) return {};
-        // Matches node-addon-api 8.9.0's New(env, fn, resourceName,
-        // maxQueueSize, initialThreadCount) overload. The old 7-arg call
-        // (nullptr context + finalizer) fails template deduction because
-        // nullptr_t doesn't deduce against a ContextType* parameter — and
-        // it isn't needed anyway since callOpenTSFN/etc. already delete
-        // their own heap data after use.
         return Napi::ThreadSafeFunction::New(
             env, opts.Get(name).As<Napi::Function>(), name, 0, 1);
     };
 
-    // Release old TSFNs before replacing — prevents Node.js refcount leaks
-    if (onOpenCallback_)    { onOpenCallback_.Release();    }
-    if (onMessageCallback_) { onMessageCallback_.Release(); }
-    if (onCloseCallback_)   { onCloseCallback_.Release();   }
-    if (onDrainCallback_)   { onDrainCallback_.Release();   }
+    // Release old TSFNs before replacing
+    if (onOpenCallback_)          { onOpenCallback_.Release();          }
+    if (onMessageCallback_)       { onMessageCallback_.Release();       }
+    if (onCloseCallback_)         { onCloseCallback_.Release();         }
+    if (onDrainCallback_)         { onDrainCallback_.Release();         }
+    if (onJoinConfirmedCallback_) { onJoinConfirmedCallback_.Release(); } // NEW
 
     onOpenCallback_    = makeTSFN("onOpen");
     onMessageCallback_ = makeTSFN("onMessage");
     onCloseCallback_   = makeTSFN("onClose");
     onDrainCallback_   = makeTSFN("onDrain");
+    // NOTE: onJoinConfirmed is NOT set here – it's set via setOnJoinConfirmed()
 }
 
 // ── Connection cleanup (called from uWS thread) ──────────────────────
 
 void WebSocketServer::cleanupConnection(const std::string& connectionId) {
-    // Remove from socket map
     {
         std::unique_lock<std::shared_mutex> lock(socketMutex_);
         sockets_.erase(connectionId);
     }
-
-    // Leave all rooms (metadata)
     roomManager_->leaveAll(connectionId);
-
-    // Reset rate limiter
     rateLimiter_->resetConnection(connectionId);
-
-    // Remove backpressure tracking
     backpressureManager_->removeConnection(connectionId);
-
-    // Remove user mapping, IP throttle, connection info
     {
         std::lock_guard<std::mutex> lock(userMapMutex_);
         auto connIt = connections_.find(connectionId);
@@ -533,33 +534,28 @@ void WebSocketServer::cleanupConnection(const std::string& connectionId) {
             connections_.erase(connIt);
         }
     }
-
     metrics_.activeConnections.fetch_sub(1, std::memory_order_relaxed);
 }
 
-// ── Async operation queue (JS thread enqueues, uWS thread processes) ─
+// ── Async operation queue ─────────────────────────────────────────────
 
 void WebSocketServer::enqueueOp(OpType type, const std::string& arg1, const std::string& arg2) {
     {
         std::lock_guard<std::mutex> lock(pendingMutex_);
         pendingOps_.push({type, arg1, arg2});
     }
-    // async_ holds a uWS::Loop*. defer() is uWS's actual thread-safe
-    // cross-thread wakeup call (no separate Async object in this version).
     if (async_) {
         static_cast<uWS::Loop*>(async_)->defer([this]() { executePendingOperations(); });
     }
 }
 
 void WebSocketServer::executePendingOperations() {
-    // Drain the queue under lock, process without lock (all on uWS thread)
     std::queue<PendingOp> ops;
     {
         std::lock_guard<std::mutex> lock(pendingMutex_);
         ops.swap(pendingOps_);
     }
 
-    // FIX #1: app_ stores a heap-allocated NativeApp*, cast accordingly.
     auto* app = static_cast<NativeApp*>(app_);
     if (!app) return;
 
@@ -592,17 +588,9 @@ void WebSocketServer::executePendingOperations() {
         case OpType::BROADCAST_TO_ROOM: {
             std::string messageId = generateConnectionId();
             size_t bytes = op.arg2.size();
-
-            // FIX #5 (minor): snapshot recipient count BEFORE publishing so
-            // the metric isn't skewed by joins/leaves that race the publish.
             size_t recipients = roomManager_->getRoomSize(op.arg1);
-
-            // publish()'s 3rd arg is the message OpCode (TEXT/BINARY), not a
-            // compression flag — compression is the separate 4th bool arg.
             app->publish(op.arg1, op.arg2, uWS::OpCode::TEXT, compressionEnabled_);
-
             broadcastHistory_->store(op.arg1, op.arg2, messageId);
-
             metrics_.totalMessagesSent.fetch_add(recipients, std::memory_order_relaxed);
             metrics_.totalBytesSent.fetch_add(bytes * recipients, std::memory_order_relaxed);
             break;
@@ -612,6 +600,7 @@ void WebSocketServer::executePendingOperations() {
                 std::unique_lock<std::shared_mutex> lock(socketMutex_);
                 auto it = sockets_.find(op.arg1);
                 if (it != sockets_.end()) {
+                    // ── SUBSCRIBE HAPPENS HERE ──────────────────────
                     static_cast<NativeWS*>(it->second)->subscribe(op.arg2);
                 }
             }
@@ -623,6 +612,13 @@ void WebSocketServer::executePendingOperations() {
                     ci->second.rooms.push_back(op.arg2);
                 }
             }
+
+            // ── FIRE CONFIRMATION AFTER SUBSCRIBE ──────────────────
+            auto* d = new JoinConfirmData{
+                .connectionId = op.arg1,
+                .room         = op.arg2,
+            };
+            callJoinConfirmTSFN(onJoinConfirmedCallback_, d);
             break;
         }
         case OpType::LEAVE_ROOM: {
@@ -657,10 +653,6 @@ void WebSocketServer::executePendingOperations() {
             break;
         }
         case OpType::SHUTDOWN: {
-            // uWS::Loop has no stop(). Per uWS's own docs: you never stop
-            // the loop directly — you close the listen socket and end all
-            // open sockets, and app->run() returns once the loop has
-            // nothing left to do.
             if (listenSocket_) {
                 us_listen_socket_close(0, static_cast<us_listen_socket_t*>(listenSocket_));
                 listenSocket_ = nullptr;
@@ -685,7 +677,6 @@ void WebSocketServer::executePendingOperations() {
 // ══════════════════════════════════════════════════════════════════════
 
 void WebSocketServer::runServer() {
-    // Capture config by value — this thread outlives the calling scope.
     auto host               = host_;
     auto port               = port_;
     auto compressionEnabled = compressionEnabled_;
@@ -694,30 +685,14 @@ void WebSocketServer::runServer() {
     auto maxPayload         = maxPayloadBytes_;
     auto hwm                = highWaterMark_;
 
-    // FIX #1: Allocate uWS App on the heap so app_ doesn't become a
-    // dangling pointer. The pointer is stored in app_ and deleted in the
-    // post-loop cleanup block below.
-    // NOTE: the App constructor takes SocketContextOptions, which has no
-    // `compression` field — compression is a per-route setting and is
-    // already set correctly below on app->ws<PerSocketData>(...).
-    // Passing it here is what broke the constructor call.
     auto* app = new NativeApp();
     app_ = app;
 
     WebSocketServer* self = this;
 
-    // ── Wakeup mechanism: drains the JS→uWS operation queue ──────────
-    // uWS v20 has no uWS::Async class. The real thread-safe cross-thread
-    // wakeup primitive is uWS::Loop::defer(), which runs a lambda on the
-    // loop's own thread (it calls us_wakeup_loop internally). async_
-    // stores the uWS::Loop* itself (still declared void* in the header)
-    // so enqueueOp() can call defer() from the JS thread.
     async_ = uWS::Loop::get();
-    // Signal start() that the loop pointer is ready
     loopReadyCv_.notify_all();
 
-    // ── WebSocket handler ────────────────────────────────────────────
-    // FIX #1: use -> not . because app is a pointer.
     app->ws<PerSocketData>("/*", {
         .compression      = compressionEnabled ? uWS::SHARED_COMPRESSOR : uWS::DISABLED,
         .maxPayloadLength = maxPayload,
@@ -747,9 +722,6 @@ void WebSocketServer::runServer() {
             req->getHeader("sec-websocket-key"),
             req->getHeader("sec-websocket-protocol"),
             req->getHeader("sec-websocket-extensions"),
-            // FIX: this 5th arg must be the us_socket_context_t* passed into
-            // the upgrade handler (context) — not a header string. uWS uses
-            // it to look up the WebSocket behavior/context to adopt into.
             context);
         },
 
@@ -836,7 +808,6 @@ void WebSocketServer::runServer() {
             auto* data = ws->getUserData();
             std::string connId = data->connectionId;
 
-            // Notify JS before cleanup destroys the per-connection data
             auto* d = new CloseData{
                 .connectionId = connId,
                 .code         = code,
@@ -848,25 +819,17 @@ void WebSocketServer::runServer() {
         },
     });
 
-    // FIX #1: use -> not .
     app->listen(host, port, [self](auto* listenSocket) {
         if (!listenSocket) {
             fprintf(stderr, "[elysiajscppws] FATAL: failed to bind to port\n");
         } else {
-            // Stored so SHUTDOWN can close it later — see note above SHUTDOWN
-            // handling in executePendingOperations().
             self->listenSocket_ = listenSocket;
         }
     });
 
-    // Blocks until the loop falls through naturally — i.e. until SHUTDOWN
-    // closes the listen socket and ends all open connections.
     app->run();
 
-    // ── Post-loop cleanup ────────────────────────────────────────────
-    // async_ just holds a uWS::Loop*, which uWS owns — never delete it.
     async_ = nullptr;
-    // FIX #1: delete the heap-allocated NativeApp (was stack-local before)
     delete static_cast<NativeApp*>(app_);
     app_ = nullptr;
 }
@@ -883,14 +846,38 @@ Napi::Value WebSocketServer::start(const Napi::CallbackInfo& info) {
         Napi::Error::New(env, "WebSocket server is already running").ThrowAsJavaScriptException();
         return env.Null();
     }
+
+    stopped_      = false;
+    listenSocket_ = nullptr;
+    async_        = nullptr;
+
+    if (wsThread_.joinable()) {
+        Napi::Error::New(env,
+            "Internal error: previous server thread was not joined before restart")
+            .ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(pendingMutex_);
+        std::queue<PendingOp> empty;
+        pendingOps_.swap(empty);
+    }
+
+    {
+        std::unique_lock<std::shared_mutex> lock(socketMutex_);
+        sockets_.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(userMapMutex_);
+        connections_.clear();
+        userToConnection_.clear();
+    }
+
     running_ = true;
     metrics_.startedAt = std::chrono::steady_clock::now();
     wsThread_ = std::thread(&WebSocketServer::runServer, this);
 
-    // Wait until runServer() has set async_ (the uWS loop pointer) before
-    // returning. Without this, stop() called immediately after start() finds
-    // async_ == nullptr and skips the defer() wakeup, so SHUTDOWN never runs
-    // and wsThread_.join() blocks forever.
     std::unique_lock<std::mutex> lk(loopReadyMutex_);
     loopReadyCv_.wait(lk, [this] { return async_ != nullptr || !running_; });
 
@@ -903,7 +890,6 @@ Napi::Value WebSocketServer::stop(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
     std::lock_guard<std::mutex> lock(stopMutex_);
-    // If already stopped (or stopping), return false.
     if (stopped_.exchange(true)) return Napi::Boolean::New(env, false);
 
     running_ = false;
@@ -911,10 +897,11 @@ Napi::Value WebSocketServer::stop(const Napi::CallbackInfo& info) {
     if (wsThread_.joinable()) wsThread_.join();
 
     // Release TSFNs (safe even if destructor later tries again)
-    if (onOpenCallback_)    { onOpenCallback_.Release();    onOpenCallback_    = Napi::ThreadSafeFunction(); }
-    if (onMessageCallback_) { onMessageCallback_.Release(); onMessageCallback_ = Napi::ThreadSafeFunction(); }
-    if (onCloseCallback_)   { onCloseCallback_.Release();   onCloseCallback_   = Napi::ThreadSafeFunction(); }
-    if (onDrainCallback_)   { onDrainCallback_.Release();   onDrainCallback_   = Napi::ThreadSafeFunction(); }
+    if (onOpenCallback_)          { onOpenCallback_.Release();          onOpenCallback_          = Napi::ThreadSafeFunction(); }
+    if (onMessageCallback_)       { onMessageCallback_.Release();       onMessageCallback_       = Napi::ThreadSafeFunction(); }
+    if (onCloseCallback_)         { onCloseCallback_.Release();         onCloseCallback_         = Napi::ThreadSafeFunction(); }
+    if (onDrainCallback_)         { onDrainCallback_.Release();         onDrainCallback_         = Napi::ThreadSafeFunction(); }
+    if (onJoinConfirmedCallback_) { onJoinConfirmedCallback_.Release(); onJoinConfirmedCallback_ = Napi::ThreadSafeFunction(); } // NEW
 
     return Napi::Boolean::New(env, true);
 }
@@ -923,7 +910,7 @@ Napi::Value WebSocketServer::isRunning(const Napi::CallbackInfo& info) {
     return Napi::Boolean::New(info.Env(), running_.load());
 }
 
-// ── Room operations (dispatched to uWS thread via async queue) ───────
+// ── Room operations ───────────────────────────────────────────────────
 
 Napi::Value WebSocketServer::joinRoom(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
@@ -1099,7 +1086,7 @@ Napi::Value WebSocketServer::getMetrics(const Napi::CallbackInfo& info) {
     return r;
 }
 
-// ── Configuration (must be called before start) ──────────────────────
+// ── Configuration ─────────────────────────────────────────────────────
 
 Napi::Value WebSocketServer::configure(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
@@ -1138,8 +1125,6 @@ Napi::Value WebSocketServer::configure(const Napi::CallbackInfo& info) {
         broadcastHistory_ = std::make_unique<BroadcastHistory>(
             static_cast<size_t>(opts.Get("maxHistoryPerRoom").As<Napi::Number>().Int32Value()));
 
-    // FIX #3: Only update TSFNs when callbacks are explicitly provided.
-    // registerCallbacks releases old TSFNs before creating new ones.
     if (opts.Has("onOpen") || opts.Has("onMessage") ||
         opts.Has("onClose") || opts.Has("onDrain")) {
         registerCallbacks(info);
@@ -1180,6 +1165,23 @@ Napi::Value WebSocketServer::getHistory(const Napi::CallbackInfo& info) {
         arr.Set(i, obj);
     }
     return arr;
+}
+
+// ── NEW: setOnJoinConfirmed implementation ──────────────────────────
+
+Napi::Value WebSocketServer::setOnJoinConfirmed(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsFunction()) {
+        Napi::TypeError::New(env, "setOnJoinConfirmed(callback: Function)")
+            .ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    if (onJoinConfirmedCallback_) {
+        onJoinConfirmedCallback_.Release();
+    }
+    onJoinConfirmedCallback_ = Napi::ThreadSafeFunction::New(
+        env, info[0].As<Napi::Function>(), "onJoinConfirmed", 0, 1);
+    return env.Null();
 }
 
 } // namespace elysiacppws

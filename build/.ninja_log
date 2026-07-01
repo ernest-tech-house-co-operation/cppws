@@ -10,3 +10,9 @@
 209	6427	1782793067618440556	CMakeFiles/cppws_native.dir/src/cpp/binding.cpp.o	c03784aba4ab8c2d
 210	23537	1782793084724564686	CMakeFiles/cppws_native.dir/src/cpp/websocket_core.cpp.o	2bb19939e1d31255
 23537	26826	1782793088014588552	Release/cppws_native.node	ecc1fcf90fa38b17
+54	6742	1782844168583282025	CMakeFiles/cppws_native.dir/src/cpp/binding.cpp.o	c03784aba4ab8c2d
+55	22090	1782844183927177299	CMakeFiles/cppws_native.dir/src/cpp/websocket_core.cpp.o	2bb19939e1d31255
+22090	23923	1782844185761164956	Release/cppws_native.node	ecc1fcf90fa38b17
+43	5183	1782876954203127053	CMakeFiles/cppws_native.dir/src/cpp/binding.cpp.o	c03784aba4ab8c2d
+43	21111	1782876970127355246	CMakeFiles/cppws_native.dir/src/cpp/websocket_core.cpp.o	2bb19939e1d31255
+21111	22162	1782876971179370314	Release/cppws_native.node	ecc1fcf90fa38b17
