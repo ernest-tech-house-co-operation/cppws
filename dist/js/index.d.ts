@@ -29,7 +29,6 @@ export declare class WebSocketServer extends TypedEmitter<ServerEvents> {
     private _messageHandler?;
     private _closeHandler?;
     private _drainHandler?;
-    private pendingJoins;
     constructor(options?: WSOptions);
     onOpen(fn: (ctx: WSContext) => void | Promise<void>): this;
     onMessage(fn: (ctx: WSContext, data: any) => void | Promise<void>): this;
@@ -46,7 +45,6 @@ export declare class WebSocketServer extends TypedEmitter<ServerEvents> {
     private handleNativeClose;
     private handleNativeDrain;
     private wireNativeCallbacks;
-    private joinRoom;
     getMetrics(): WSMetrics;
     getConnectionCount(): number;
     getHistory(room: string, sinceTimestamp?: number): HistoryEntry[];

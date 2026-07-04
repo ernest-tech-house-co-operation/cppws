@@ -35,8 +35,6 @@ export class WebSocketServer extends TypedEmitter {
     _messageHandler;
     _closeHandler;
     _drainHandler;
-    // ── NEW: pending join promises ─────────────────────────────
-    pendingJoins = new Map();
     constructor(options = {}) {
         super();
         this.options = options;
@@ -108,7 +106,7 @@ export class WebSocketServer extends TypedEmitter {
                     maxConnectionsPerIP: this.options.security.maxConnectionsPerIP ?? 10,
                 }
                 : undefined,
-            // ── C++ → JS callbacks ──────────────────────────────
+            // ── C++ → JS callbacks (ThreadSafeFunction targets) ──
             onOpen: (data) => {
                 this.handleNativeOpen(data.connectionId, data.ip, data.path);
             },
@@ -127,15 +125,7 @@ export class WebSocketServer extends TypedEmitter {
             config.certPath = tls.cert;
             config.keyPath = tls.key;
         }
-        // ── Wire the confirmation callback BEFORE start ──────
-        this.native.setOnJoinConfirmed(({ connectionId, room }) => {
-            const key = `${connectionId}:${room}`;
-            const resolve = this.pendingJoins.get(key);
-            if (resolve) {
-                this.pendingJoins.delete(key);
-                resolve();
-            }
-        });
+        // ── Step 1: configure and start the native server ──
         this.native.configure(config);
         this.native.start();
         this.started = true;
@@ -153,6 +143,8 @@ export class WebSocketServer extends TypedEmitter {
         this.metricsCollector.stop();
         this.rateLimiter?.destroy();
         this.connectionThrottler?.destroy();
+        // Flush all pending joins and clean up RoomManager
+        this.roomManager.destroy();
         for (const [, ctx] of this.connections) {
             try {
                 ctx.close(1001, 'Server shutting down');
@@ -186,6 +178,13 @@ export class WebSocketServer extends TypedEmitter {
         }
     }
     handleNativeMessage(connectionId, rawData) {
+        // Intercept internal join confirmations before they ever touch
+        // JSON.parse or the user's onMessage handler.
+        if (rawData.startsWith('__joinConfirmed:')) {
+            const room = rawData.slice('__joinConfirmed:'.length);
+            this.roomManager._handleJoinConfirm(connectionId, room);
+            return;
+        }
         const ctx = this.connections.get(connectionId);
         if (!ctx)
             return;
@@ -201,7 +200,7 @@ export class WebSocketServer extends TypedEmitter {
         this.eventBus.emit('messageReceived', { connectionId, data: rawData, bytes: dataBytes });
         this.emit('message', { connectionId, data: parsed });
         if (this._messageHandler) {
-            // ── Await the handler so ctx.join() can wait for confirmation ──
+            // Await the handler so ctx.join() can wait for confirmation
             Promise.resolve(this._messageHandler(ctx, parsed)).catch(err => {
                 logger.error(`Error in message handler: ${err}`);
             });
@@ -211,6 +210,8 @@ export class WebSocketServer extends TypedEmitter {
         const ctx = this.connections.get(connectionId);
         if (!ctx)
             return;
+        // ── Clean up any pending joins for this connection ──────
+        this.roomManager.cancelPendingJoins(connectionId);
         ctx.leaveAll();
         this.connections.delete(connectionId);
         this.rateLimiter?.removeConnection(connectionId);
@@ -234,17 +235,9 @@ export class WebSocketServer extends TypedEmitter {
             });
         }
     }
-    // ── Wire callbacks into native configure ──────────────────
+    // ── Wire callbacks (no‑op now – setOnJoinConfirmed is wired after configure) ──
     wireNativeCallbacks() {
-        // Now done inside initialize() via setOnJoinConfirmed
-    }
-    // ── NEW: Promise-returning joinRoom wrapper ────────────────
-    joinRoom(connectionId, room) {
-        return new Promise(resolve => {
-            const key = `${connectionId}:${room}`;
-            this.pendingJoins.set(key, resolve);
-            this.native.joinRoom(connectionId, room);
-        });
+        // Nothing to do here – the confirmation callback is set in initialize() after configure.
     }
     // ── Public API ────────────────────────────────────────────
     getMetrics() {

@@ -187,16 +187,6 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
         this.native.start();
         this.started = true;
 
-        // ── Step 2: wire join confirmation AFTER configure() ──
-        // This prevents registerCallbacks() from releasing it.
-        if (typeof (this.native as any).setOnJoinConfirmed === 'function') {
-            (this.native as any).setOnJoinConfirmed(
-                ({ connectionId, room }: { connectionId: string; room: string }) => {
-                    this.roomManager._handleJoinConfirm(connectionId, room);
-                }
-            );
-        }
-
         this.messageBatcher?.start();
         this.metricsCollector.start();
 
@@ -258,6 +248,14 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
     }
 
     private handleNativeMessage(connectionId: string, rawData: string): void {
+        // Intercept internal join confirmations before they ever touch
+        // JSON.parse or the user's onMessage handler.
+        if (rawData.startsWith('__joinConfirmed:')) {
+            const room = rawData.slice('__joinConfirmed:'.length);
+            this.roomManager._handleJoinConfirm(connectionId, room);
+            return;
+        }
+
         const ctx = this.connections.get(connectionId);
         if (!ctx) return;
 

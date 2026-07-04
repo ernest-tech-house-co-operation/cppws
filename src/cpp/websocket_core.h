@@ -56,12 +56,6 @@ struct DrainData {
     std::string connectionId;
 };
 
-// ── NEW: confirmation payload for JOIN_ROOM ──────────────────────────
-struct JoinConfirmData {
-    std::string connectionId;
-    std::string room;
-};
-
 // ══════════════════════════════════════════════════════════════════════
 //  Async operation queue  (JS thread → uWS thread)
 // ══════════════════════════════════════════════════════════════════════
@@ -254,9 +248,6 @@ public:
     // ── History ────────────────────────────────────────────────────
     Napi::Value getHistory(const Napi::CallbackInfo& info);
 
-    // ── NEW: set confirmation callback for join operations ────────
-    Napi::Value setOnJoinConfirmed(const Napi::CallbackInfo& info);
-
 private:
     // ── Server config ──────────────────────────────────────────────
     std::string host_               = "0.0.0.0";
@@ -300,9 +291,6 @@ private:
     Napi::ThreadSafeFunction onCloseCallback_;
     Napi::ThreadSafeFunction onDrainCallback_;
     Napi::ThreadSafeFunction onUpgradeCallback_;
-
-    // ── NEW: confirmation callback for joins ──────────────────────
-    Napi::ThreadSafeFunction onJoinConfirmedCallback_;
 
     // ── Async op queue  (JS thread enqueues, uWS thread drains) ───
     mutable std::mutex      pendingMutex_;
