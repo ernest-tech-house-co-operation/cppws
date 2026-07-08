@@ -82,6 +82,14 @@ function openWS(url: string, protocols?: string[]): Promise<WebSocket> {
     logger.debug(`🔌 openWS: creating socket to ${url}${protocols ? ' with protocols '+protocols.join(',') : ''}`);
     return new Promise((resolve, reject) => {
         const socket = protocols ? new WebSocket(url, protocols) : new WebSocket(url);
+
+        // Buffer messages from the instant the socket exists — before
+        // .onopen even fires — so nothing can arrive into a null handler.
+        (socket as any)._msgQueue = [];
+        socket.onmessage = (e: MessageEvent) => {
+            (socket as any)._msgQueue.push(e);
+        };
+
         const timer = setTimeout(() => {
             logger.error(`⏰ openWS: timeout after 3000ms for ${url}`);
             reject(new Error('WS open timeout'));
@@ -102,9 +110,19 @@ function openWS(url: string, protocols?: string[]): Promise<WebSocket> {
         };
     });
 }
-
 /** Wait for the next message on a socket, parsed as JSON when possible. */
 function nextMessage(socket: WebSocket, ms = 2000): Promise<any> {
+    const queue: MessageEvent[] = (socket as any)._msgQueue ?? [];
+
+    // Already-arrived message sitting in the buffer? Use it immediately.
+    if (queue.length > 0) {
+        const e = queue.shift()!;
+        let data;
+        try { data = JSON.parse(e.data); } catch { data = e.data; }
+        logger.debug(`📨 nextMessage: received (from buffer) ${typeof data === 'object' ? JSON.stringify(data).slice(0, 80) : data}`);
+        return Promise.resolve(data);
+    }
+
     logger.debug(`📨 nextMessage: waiting for message (timeout ${ms}ms)`);
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
@@ -120,7 +138,6 @@ function nextMessage(socket: WebSocket, ms = 2000): Promise<any> {
         };
     });
 }
-
 /** Send a message and wait for the first reply. */
 async function sendAndReceive(socket: WebSocket, payload: any, ms = 3000): Promise<any> {
     const raw = typeof payload === 'string' ? payload : JSON.stringify(payload);

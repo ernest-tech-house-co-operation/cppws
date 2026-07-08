@@ -28,6 +28,13 @@
 ---
 ## NOTE
  Notice: never call `process.exit()` (or anything that triggers process teardown) synchronously inside a native callback — `onmessage`, `onOpen`, `onClose`, any TSFN-driven handler. Those callbacks execute *during* an N-API `NonBlockingCall` invocation, still on the call stack that the C++ thread is waiting on. `process.exit()` forces immediate native cleanup (your destructor), which tries to `join()` the same uWS thread that's mid-callback — that's a self-join, and the runtime throws `Resource deadlock avoided` and aborts instead of failing gracefully. Always defer exit/shutdown logic out of the callback with `setImmediate`/`queueMicrotask` so the native thread finishes its call and returns control to JS first — this rule applies anywhere you tear down the process or the server, not just in tests.
+ 
+## Note: always buffer WebSocket test-client messages from socket creation, not from first read.
+If your test harness does `new WebSocket(url)` and only attaches `.onmessage` later (e.g. inside a `nextMessage()` helper called after `await open`), you're gambling on a race: if the server responds before that listener gets attached, the message fires into a `null` handler and is **gone forever** — no error, no queue, nothing to catch. WebSockets don't replay missed events.
+
+This race is invisible with a single client (barely any gap between open and listen) but shows up reliably once you open multiple sockets back-to-back, since the second/third client's listener attachment gets delayed by the first one's setup work.
+
+**Fix:** attach a message-queueing handler the instant the socket object is created — before `onopen` even fires — and have your "wait for next message" helper check that buffer first before falling back to a real listener. That way it's architecturally impossible to lose a message to a timing gap, no matter how the calling test code is structured or ordered later.
 ## Prerequisites
 
 - **Node.js** >= 18.0.0, **Bun** latest, or **Deno** with N-API support
