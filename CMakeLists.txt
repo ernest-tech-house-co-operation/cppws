@@ -175,6 +175,10 @@ if(WIN32)
     # oldnames.lib: aliases POSIX names (unlink, chmod, ...) to their MSVC
     # underscore-prefixed CRT equivalents (_unlink, _chmod, ...)
     target_link_libraries(cppws_native PRIVATE oldnames)
+    # __imp__unlink / __imp__chmod are import thunks into ucrt.dll for
+    # _unlink/_chmod. cmake-js/node-gyp link with /NODEFAULTLIB on Windows,
+    # which drops the implicit ucrt.lib link — force it back explicitly.
+    target_link_options(cppws_native PRIVATE "/DEFAULTLIB:ucrt.lib")
     # zlib: needed for uWS permessage-deflate (inflate*/deflate* symbols)
     target_link_libraries(cppws_native PRIVATE ZLIB::ZLIB)
     # Winsock + CryptoAPI: pulled in transitively on Linux/macOS but
