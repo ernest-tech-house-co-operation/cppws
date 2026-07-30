@@ -858,9 +858,9 @@ void WebSocketServer::runServer() {
 
     app->ws<PerSocketData>("/*", {
         .compression      = compressionEnabled ? uWS::SHARED_COMPRESSOR : uWS::DISABLED,
-        .maxPayloadLength = maxPayload,
-        .idleTimeout      = static_cast<int32_t>(idleTimeout),
-        .maxBackpressure  = static_cast<uint32_t>(hwm),
+        .maxPayloadLength = static_cast<unsigned int>(maxPayload),
+        .idleTimeout      = static_cast<unsigned short>(idleTimeout),
+        .maxBackpressure  = static_cast<unsigned int>(hwm),
 
         .upgrade = [self](auto* res, auto* req, auto* context) {
             LOG("upgrade callback entered");
