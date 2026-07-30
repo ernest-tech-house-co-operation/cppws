@@ -1,10 +1,6 @@
-bb.txt
-package-lock.json
-build
-deps
-node_modules
 # ── Dependencies ──────────────────────────────
 node_modules/
+deps/
 .pnp
 .pnp.js
 
