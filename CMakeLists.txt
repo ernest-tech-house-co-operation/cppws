@@ -36,34 +36,55 @@ if(NOT node-addon-api_FOUND)
         "node-addon-api not found. Install it with: npm install node-addon-api")
 endif()
 
-# ── uWebSockets (uSockets) - USE LOCAL COPY ──────────────────────────
-set(USOCKETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/uWebSockets/uSockets")
+# ── uWebSockets (uSockets) ────────────────────────────────────────────
+# Windows: uSockets ships a GNU-style Makefile (wildcard globs, gcc flags
+# like -flto/-std=c11) that MSVC's nmake cannot parse — nmake isn't GNU
+# Make, and cl.exe doesn't accept those flags. There is no working local
+# build path for uSockets on MSVC. Use vcpkg's `usockets` port instead,
+# which builds a proper MSVC-toolchain-compatible static lib.
+# uWebSockets' own headers (App.h etc.) still come from our pinned local
+# clone on every platform, so the API surface stays identical everywhere.
 set(UWS_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/uWebSockets/src")
 
-if(EXISTS "${USOCKETS_DIR}/src/libusockets.h")
-    message(STATUS "Found local uSockets at: ${USOCKETS_DIR}")
-
-    set(USOCKETS_INCLUDE_DIR "${USOCKETS_DIR}/src")
-
-    if(EXISTS "${USOCKETS_DIR}/uSockets.a")
-        set(USOCKETS_LIBRARY "${USOCKETS_DIR}/uSockets.a")
-        message(STATUS "Found uSockets library: ${USOCKETS_LIBRARY}")
-    else()
-        message(FATAL_ERROR "uSockets library not built. Please build it: cd ${USOCKETS_DIR} && make")
+if(WIN32)
+    find_package(unofficial-usockets CONFIG REQUIRED)
+    if(NOT TARGET unofficial::usockets::usockets)
+        message(FATAL_ERROR
+            "vcpkg's usockets port didn't export the expected target "
+            "(unofficial::usockets::usockets). Run: vcpkg install usockets "
+            "and make sure CMAKE_TOOLCHAIN_FILE points at vcpkg.cmake.")
     endif()
-
-    add_library(uSockets STATIC IMPORTED)
-    set_target_properties(uSockets PROPERTIES
-        IMPORTED_LOCATION "${USOCKETS_LIBRARY}"
-        INTERFACE_INCLUDE_DIRECTORIES "${USOCKETS_INCLUDE_DIR}"
-    )
+    add_library(uSockets ALIAS unofficial::usockets::usockets)
     set(UWS_SYSTEM_INSTALL TRUE)
-
+    message(STATUS "Using vcpkg-provided usockets (unofficial::usockets::usockets)")
 else()
-    message(FATAL_ERROR
-        "Local uSockets not found at ${USOCKETS_DIR}. "
-        "Please clone with submodules: git clone --recurse-submodules --depth 1 --branch v20.67.0 https://github.com/uNetworking/uWebSockets.git deps/uWebSockets"
-    )
+    set(USOCKETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/uWebSockets/uSockets")
+
+    if(EXISTS "${USOCKETS_DIR}/src/libusockets.h")
+        message(STATUS "Found local uSockets at: ${USOCKETS_DIR}")
+
+        set(USOCKETS_INCLUDE_DIR "${USOCKETS_DIR}/src")
+
+        if(EXISTS "${USOCKETS_DIR}/uSockets.a")
+            set(USOCKETS_LIBRARY "${USOCKETS_DIR}/uSockets.a")
+            message(STATUS "Found uSockets library: ${USOCKETS_LIBRARY}")
+        else()
+            message(FATAL_ERROR "uSockets library not built. Please build it: cd ${USOCKETS_DIR} && make")
+        endif()
+
+        add_library(uSockets STATIC IMPORTED)
+        set_target_properties(uSockets PROPERTIES
+            IMPORTED_LOCATION "${USOCKETS_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${USOCKETS_INCLUDE_DIR}"
+        )
+        set(UWS_SYSTEM_INSTALL TRUE)
+
+    else()
+        message(FATAL_ERROR
+            "Local uSockets not found at ${USOCKETS_DIR}. "
+            "Please clone with submodules: git clone --recurse-submodules --depth 1 --branch v20.67.0 https://github.com/uNetworking/uWebSockets.git deps/uWebSockets"
+        )
+    endif()
 endif()
 
 # ── OpenSSL (TLS support) ────────────────────────────────────────────
@@ -87,23 +108,31 @@ else()
 endif()
 
 # ── libuv (required by uSockets) ─────────────────────────────────────
+# NOTE: find_package(LibUV) is unreliable across platforms — on macOS,
+# Homebrew's libuv CMake config creates the LibUV::LibUV target but omits
+# IMPORTED_LOCATION, which silently produces LibUV::LibUV-NOTFOUND at link
+# time. We always resolve the library path ourselves and force it onto
+# whatever target exists (or create one), rather than trusting a found
+# package config to have configured itself correctly.
 find_package(LibUV QUIET)
 
-if(NOT LibUV_FOUND)
-    find_path(LIBUV_INCLUDE_DIR NAMES uv.h)
-    find_library(LIBUV_LIBRARY NAMES uv)
+find_path(LIBUV_INCLUDE_DIR NAMES uv.h)
+find_library(LIBUV_LIBRARY NAMES uv libuv)
 
-    if(LIBUV_INCLUDE_DIR AND LIBUV_LIBRARY)
-        set(LibUV_FOUND TRUE)
-        message(STATUS "Found libuv: ${LIBUV_LIBRARY}")
-    else()
-        message(FATAL_ERROR
-            "libuv not found. Install it with your system package manager "
-            "(e.g., apt install libuv1-dev, brew install libuv)")
-    endif()
+if(NOT LIBUV_INCLUDE_DIR OR NOT LIBUV_LIBRARY)
+    message(FATAL_ERROR
+        "libuv not found. Install it with your system package manager "
+        "(e.g., apt install libuv1-dev, brew install libuv, vcpkg install libuv)")
 endif()
 
-if(LibUV_FOUND AND NOT TARGET LibUV::LibUV)
+message(STATUS "Found libuv: ${LIBUV_LIBRARY}")
+
+if(TARGET LibUV::LibUV)
+    set_target_properties(LibUV::LibUV PROPERTIES
+        IMPORTED_LOCATION "${LIBUV_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${LIBUV_INCLUDE_DIR}"
+    )
+else()
     add_library(LibUV::LibUV UNKNOWN IMPORTED)
     set_target_properties(LibUV::LibUV PROPERTIES
         IMPORTED_LOCATION "${LIBUV_LIBRARY}"
