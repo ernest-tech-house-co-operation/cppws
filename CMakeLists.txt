@@ -1,4 +1,15 @@
 cmake_minimum_required(VERSION 3.15)
+
+# Force dynamic CRT (/MD, /MDd) everywhere. vcpkg's x64-windows triplet
+# builds usockets/libuv against the dynamic UCRT (ucrt.lib); if this
+# project's own CRT selection defaults to static (/MT, libucrt.lib)
+# instead, you get missing __imp__ import-thunk symbols (_unlink,
+# _chmod, ...) or, once those libs are forced in, LNK2005 duplicate
+# definitions between libucrt.lib and ucrt.lib. Must be set before
+# project().
+cmake_policy(SET CMP0091 NEW)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+
 project(cppws LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -172,13 +183,6 @@ if(WIN32)
     # node.lib: resolves napi_call_threadsafe_function / napi_release_threadsafe_function
     # (link-time required on MSVC, unlike Linux/macOS runtime symbol resolution)
     target_link_libraries(cppws_native PRIVATE ${CMAKE_JS_LIB})
-    # oldnames.lib: aliases POSIX names (unlink, chmod, ...) to their MSVC
-    # underscore-prefixed CRT equivalents (_unlink, _chmod, ...)
-    target_link_libraries(cppws_native PRIVATE oldnames)
-    # __imp__unlink / __imp__chmod are import thunks into ucrt.dll for
-    # _unlink/_chmod. cmake-js/node-gyp link with /NODEFAULTLIB on Windows,
-    # which drops the implicit ucrt.lib link — force it back explicitly.
-    target_link_options(cppws_native PRIVATE "/DEFAULTLIB:ucrt.lib")
     # zlib: needed for uWS permessage-deflate (inflate*/deflate* symbols)
     target_link_libraries(cppws_native PRIVATE ZLIB::ZLIB)
     # Winsock + CryptoAPI: pulled in transitively on Linux/macOS but
