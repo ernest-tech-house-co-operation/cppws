@@ -21,8 +21,6 @@ jobs:
             target: linux-x64-gnu-22.04
           - os: macos-latest
             target: darwin-arm64
-          - os: macos-13
-            target: darwin-x64
           - os: windows-latest
             target: win32-x64-msvc
     runs-on: ${{ matrix.os }}
@@ -57,6 +55,18 @@ jobs:
 
       - name: Run integration tests
         run: npx tsx tests/integration/testmain.ts
+
+      - name: Zip build output
+        shell: bash
+        run: |
+          cd build/Release
+          zip -r ../../testbuild-${{ matrix.target }}.zip .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: testbuild-${{ matrix.target }}
+          path: testbuild-${{ matrix.target }}.zip
 
       - name: Report build result
         if: always()
