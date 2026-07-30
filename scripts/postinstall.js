@@ -1,7 +1,7 @@
 // postinstall.js — runs after `npm install`
 //
 // Currently this is a no-op. When pre-built binaries are published to the
-// `@elysiajscppws/<platform-arch>` optional dependency packages, this
+// `@cppws/<platform-arch>` optional dependency packages, this
 // script will verify the correct binary is present in `prebuilds/`.
 //
 // If no binary is found the plugin falls back to a pure-JS mock at

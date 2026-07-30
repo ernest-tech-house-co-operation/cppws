@@ -590,6 +590,14 @@ std::string WebSocketServer::generateConnectionId() {
 void WebSocketServer::registerCallbacks(const Napi::CallbackInfo& info) {
     LOG("registerCallbacks called");
     Napi::Env env = info.Env();
+
+    if (running_) {
+        LOG("registerCallbacks rejected — server is running");
+        Napi::Error::New(env, "Cannot reconfigure callbacks while server is running")
+            .ThrowAsJavaScriptException();
+        return;
+    }
+
     if (info.Length() == 0 || !info[0].IsObject()) {
         LOG("no options object, returning");
         return;
