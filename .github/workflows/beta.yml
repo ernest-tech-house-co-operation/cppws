@@ -1,0 +1,107 @@
+name: Beta / Prerelease (beta)
+
+# Every push to `beta` produces a prerelease build tagged with the commit
+# short SHA, published to npm under the `beta` dist-tag. Does not touch
+# the `latest` dist-tag used by master releases.
+
+on:
+  push:
+    branches: [beta]
+
+jobs:
+  build-and-test:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64-gnu
+          - os: macos-latest
+            target: darwin-arm64
+          - os: windows-latest
+            target: win32-x64-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install cmake (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake libuv1-dev
+
+      - name: Install cmake + libuv (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake libuv
+
+      - name: Build (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x scripts/build-${{ runner.os == 'macOS' && 'macos' || 'linux' }}.sh
+          ./scripts/build-${{ runner.os == 'macOS' && 'macos' || 'linux' }}.sh --release
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/build-windows.ps1 -Release
+
+      - name: Run tests
+        run: |
+          npm run test:unit
+          npx tsx tests/integration/testmain.ts
+
+      - name: Stage prebuilt binary
+        run: node scripts/prebuild.js --pack
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prebuild-${{ matrix.target }}
+          path: prebuilds/
+
+  publish-beta:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: prebuilds/
+          merge-multiple: true
+
+      - name: Set prerelease version
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          BASE_VERSION=$(node -p "require('./package.json').version")
+          BETA_VERSION="${BASE_VERSION}-beta.${SHORT_SHA}"
+          echo "BETA_VERSION=${BETA_VERSION}" >> "$GITHUB_ENV"
+          npm version "$BETA_VERSION" --no-git-tag-version --allow-same-version
+          for dir in prebuilds/*/; do
+            node -e "
+              const fs = require('fs');
+              const p = '${dir}package.json';
+              const pkg = require('./' + p);
+              pkg.version = '${BETA_VERSION}';
+              fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
+            "
+          done
+
+      - name: Publish platform binary packages (@cppws/*)
+        run: |
+          for dir in prebuilds/*/; do
+            name=$(node -p "require('${dir}package.json').name")
+            echo "Publishing $name@$BETA_VERSION..."
+            (cd "$dir" && npm publish --tag beta --access public)
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish main package to npm
+        run: npm publish --tag beta --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
