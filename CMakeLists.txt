@@ -87,6 +87,14 @@ else()
     endif()
 endif()
 
+# ── zlib (required by uWebSockets for permessage-deflate) ────────────
+# On Linux/macOS zlib usually sneaks in as a transitive dep, but MSVC is
+# strict — nothing is linked implicitly, so we must be explicit on Windows.
+if(WIN32)
+    find_package(ZLIB REQUIRED)
+    message(STATUS "Found zlib: ${ZLIB_LIBRARIES}")
+endif()
+
 # ── OpenSSL (TLS support) ────────────────────────────────────────────
 find_package(OpenSSL QUIET)
 
@@ -158,6 +166,18 @@ if(OPENSSL_FOUND)
     target_link_libraries(cppws_native PRIVATE ${OPENSSL_LIBRARIES})
     target_include_directories(cppws_native PRIVATE ${OPENSSL_INCLUDE_DIR})
     target_compile_definitions(cppws_native PRIVATE CPPWS_TLS_ENABLED=1)
+endif()
+
+if(WIN32)
+    # zlib: needed for uWS permessage-deflate (inflate*/deflate* symbols)
+    target_link_libraries(cppws_native PRIVATE ZLIB::ZLIB)
+    # Winsock + CryptoAPI: pulled in transitively on Linux/macOS but
+    # must be explicit with MSVC
+    target_link_libraries(cppws_native PRIVATE ws2_32 crypt32)
+    # Tell uSockets to use libuv as its event loop backend (suppresses
+    # the Unix-domain-socket POSIX code that emits __imp__unlink /
+    # __imp__chmod on Windows)
+    target_compile_definitions(cppws_native PRIVATE LIBUS_USE_LIBUV=1)
 endif()
 
 if(UNIX AND NOT APPLE)

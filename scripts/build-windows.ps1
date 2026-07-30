@@ -50,7 +50,7 @@ if (-not (Test-Path "$VcpkgRoot\vcpkg.exe")) {
 }
 
 Write-Host "[build-windows] Installing usockets + libuv via vcpkg (builds them with MSVC)..."
-& "$VcpkgRoot\vcpkg.exe" install usockets:x64-windows libuv:x64-windows
+& "$VcpkgRoot\vcpkg.exe" install usockets:x64-windows libuv:x64-windows zlib:x64-windows
 
 $env:VCPKG_ROOT = $VcpkgRoot
 $ToolchainFile = "$VcpkgRoot\scripts\buildsystems\vcpkg.cmake"
