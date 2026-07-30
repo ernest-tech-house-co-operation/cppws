@@ -169,6 +169,12 @@ if(OPENSSL_FOUND)
 endif()
 
 if(WIN32)
+    # node.lib: resolves napi_call_threadsafe_function / napi_release_threadsafe_function
+    # (link-time required on MSVC, unlike Linux/macOS runtime symbol resolution)
+    target_link_libraries(cppws_native PRIVATE ${CMAKE_JS_LIB})
+    # oldnames.lib: aliases POSIX names (unlink, chmod, ...) to their MSVC
+    # underscore-prefixed CRT equivalents (_unlink, _chmod, ...)
+    target_link_libraries(cppws_native PRIVATE oldnames)
     # zlib: needed for uWS permessage-deflate (inflate*/deflate* symbols)
     target_link_libraries(cppws_native PRIVATE ZLIB::ZLIB)
     # Winsock + CryptoAPI: pulled in transitively on Linux/macOS but
