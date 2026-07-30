@@ -4,11 +4,9 @@ name: Test Build (testbuild)
 # build matrix + test suite on every push. Never publishes anything —
 # this branch exists purely to catch build errors before they reach beta
 # or master.
-
 on:
   push:
     branches: [testbuild]
-
 jobs:
   build-and-test:
     strategy:
@@ -26,42 +24,38 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-
       - name: Install cmake (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake libuv1-dev
-
       - name: Install cmake + libuv (macOS)
         if: runner.os == 'macOS'
         run: brew install cmake libuv
-
       - name: Build (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
           chmod +x scripts/build-${{ runner.os == 'macOS' && 'macos' || 'linux' }}.sh
           ./scripts/build-${{ runner.os == 'macOS' && 'macos' || 'linux' }}.sh
-
       - name: Build (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/build-windows.ps1
-
+      - name: Run unit tests
+        run: npm run test:unit
+      - name: Run integration tests
+        run: npx tsx tests/integration/testmain.ts
       - name: Zip build output
         shell: bash
         run: |
           cd build/Release
           zip -r ../../testbuild-${{ matrix.target }}.zip .
-
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: testbuild-${{ matrix.target }}
           path: testbuild-${{ matrix.target }}.zip
-
       - name: Report build result
         if: always()
         run: echo "Build+test on ${{ matrix.target }} finished with status ${{ job.status }}"
