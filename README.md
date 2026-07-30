@@ -11,7 +11,7 @@ server powered by C++ (uWebSockets). Bring your framework — cppws runs alongsi
 
 One process = one running server instance (singleton native core). This is
 intentional, not a bug — see [Multi-instance](#multi-instance) below. Current
-test status: **78 passed / 2 skipped / 1 expected failure**. Full breakdown in
+test status: **89 passed / 2 skipped / 0 failed**. Full breakdown in
 [TESTS_FINAL.md](./TESTS_FINAL.md).
 
 ## Install
