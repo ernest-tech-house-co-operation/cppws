@@ -556,12 +556,6 @@ async function testRooms(): Promise<void> {
     assertEq(bcast.text,  'hello room', 'c2 receives correct text');
     assert(typeof bcast.from === 'string', 'broadcast includes sender id');
 
-    // broadcastToRoom echoes to every room member including the sender —
-    // c1 gets its own "hello room" message too. Drain it before the next
-    // nextMessage(c1) call (vip join ack), or that call picks up this
-    // leftover instead and every assertion after it is off by one message.
-    await nextMessage(c1);
-
     // ---- Join VIP ----
     logger.debug(`🏠 c1 joining vip room`);
     c1.send(JSON.stringify({ action: 'join', room: 'vip' }));
