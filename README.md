@@ -101,6 +101,13 @@ endpoints, run two Node processes rather than two instances in one process.
 | `testbuild` | push                 | Cross-platform build matrix, catches build errors — no publish |
 | `main`      | —                    | Idle. Not wired to CI.                     |
 
+`testbuild`'s matrix covers `ubuntu-latest`, `ubuntu-22.04`, `macos-latest`
+(arm64), and `windows-latest` — `macos-13` (x64) was dropped after its
+runner queue hung indefinitely; GitHub has been retiring that label. Each
+matrix job zips its `build/Release/` output and uploads it as an
+`testbuild-<target>.zip` workflow artifact, so a build can be pulled down
+and inspected without re-running the job.
+
 See workflow files under `.github/workflows/` for the exact CI behavior of
 each branch.
 
