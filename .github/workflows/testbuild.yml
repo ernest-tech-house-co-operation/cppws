@@ -46,11 +46,17 @@ jobs:
         run: npm run test:unit
       - name: Run integration tests
         run: npx tsx tests/integration/testmain.ts
-      - name: Zip build output
+      - name: Zip build output (Linux/macOS)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           cd build/Release
           zip -r ../../testbuild-${{ matrix.target }}.zip .
+      - name: Zip build output (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build\Release\* -DestinationPath testbuild-${{ matrix.target }}.zip
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
