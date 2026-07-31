@@ -1,9 +1,18 @@
 #!/usr/bin/env node
-// prebuild.js — compile the native C++ addon and stage it as a pre-built binary
+// prebuild.js — stage the compiled native addon as a pre-built binary
 //
 // Usage:
-//   node scripts/prebuild.js              # build for current platform
-//   node scripts/prebuild.js --pack       # also create the tarball CI uploads to the GitHub Release
+//   node scripts/prebuild.js                  # stage whatever's already compiled in build/
+//   node scripts/prebuild.js --build           # compile first, then stage
+//   node scripts/prebuild.js --pack             # also create the tarball CI uploads to the GitHub Release
+//   node scripts/prebuild.js --build --pack     # compile + stage + pack, all in one (local dev convenience)
+//
+// By default this does NOT compile anything — it assumes the caller
+// already ran cmake-js (e.g. build-linux.sh / build-macos.sh /
+// build-windows.ps1 already did `npm run build:cpp` as part of the CI
+// build step). Compiling again here on top of that would just waste CI
+// time recompiling something that already exists. Pass --build if you're
+// running this standalone and haven't compiled yet.
 //
 // Output:
 //   prebuilds/<platform-arch>/cppws_native.node
@@ -82,6 +91,7 @@ function packTarball(platformArch) {
 function main() {
   const args = process.argv.slice(2)
   const doPack = args.includes('--pack')
+  const doBuild = args.includes('--build')
 
   const platformArch = getPlatformArch()
   console.log(`[prebuild] Platform: ${platformArch}`)
@@ -95,7 +105,16 @@ function main() {
   }
   console.log()
 
-  buildRelease()
+  if (doBuild) {
+    // Only compile if explicitly asked. In CI, build-linux.sh /
+    // build-macos.sh / build-windows.ps1 already ran cmake-js as part of
+    // the build step — calling it again here would silently recompile
+    // from scratch for nothing. This script's default job is just to
+    // stage (and optionally pack) whatever's already sitting in build/.
+    buildRelease()
+  } else {
+    console.log('[prebuild] Skipping compile (pass --build to compile first). Staging existing build/ output...')
+  }
   stageBinary(platformArch)
   if (doPack) packTarball(platformArch)
 

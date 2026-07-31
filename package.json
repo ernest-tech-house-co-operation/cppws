@@ -16,7 +16,7 @@
     "build:ts": "tsc && tsc-alias",
     "build": "npm run build:cpp && npm run build:ts",
     "build:release": "cmake-js build --release",
-    "prebuild": "node scripts/prebuild.js",
+    "stage:native": "node scripts/prebuild.js",
     "install": "node scripts/postinstall.js",
     "test": "vitest run",
     "test:unit": "vitest run --dir tests/unit",

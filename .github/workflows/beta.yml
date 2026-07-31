@@ -121,5 +121,13 @@ jobs:
           generate_release_notes: true
           files: release-assets/**/*.tar.gz
 
-      # npm publish (beta tag) is done manually/locally — see README.
-      # CI only cuts the GitHub prerelease with the binary tarballs.
+      - name: Install JS toolchain (skip native download/build entirely)
+        run: CPPWS_SKIP_DOWNLOAD=1 npm install --ignore-scripts
+
+      - name: Build JS output only (dist/) — no native compile here
+        run: npm run build:ts
+
+      - name: Publish JS package to npm under beta tag
+        run: npm publish --ignore-scripts --tag beta --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
