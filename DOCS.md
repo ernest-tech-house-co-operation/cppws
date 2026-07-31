@@ -31,6 +31,7 @@
 
 ## Note: Windows test suite error
 so windows test suite error is abit funny to me in my looking why allow me to explain ok, when we maked one commit tothe test build branch the nig ts test filepasses with absaloutly no error yey now when we just now make another push to the branch it fails this time so am like bro you worked 3 minutes ago, and cppws needs to be released my tiniest of gueses is race conditions the real source of the problem i have no idea race conditions is just a probability. when you get a funny error most likely in broadcasting to rooms pub sub calls it will work on minute one and fail on minute two. i am urgin devs to assist with further testing to help pinpont with the peroblem. 
+We will investigte the issue
 The library works on windows yes it is just a tiny weee funky thanks.
  
 ## Note: always buffer WebSocket test-client messages from socket creation, not from first read.
