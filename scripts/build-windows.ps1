@@ -67,7 +67,13 @@ if (-not (Test-Path "deps\uWebSockets")) {
 }
 
 Write-Host "[build-windows] Installing npm dependencies..."
+# CPPWS_SKIP_DOWNLOAD: this script's whole job is to compile the binary
+# from source, so postinstall.js has nothing to download yet (the release
+# for this version may not even exist). Without this, npm install fails
+# the entire build on a 404.
+$env:CPPWS_SKIP_DOWNLOAD = "1"
 npm install
+Remove-Item Env:\CPPWS_SKIP_DOWNLOAD
 
 Write-Host "[build-windows] Compiling native addon..."
 $CmakeJsArgs = @("--CDCMAKE_TOOLCHAIN_FILE=$ToolchainFile")
