@@ -95,9 +95,9 @@ function stageBinary(platformArch) {
 function createPackageJson(platformArch) {
   const destDir = path.resolve(__dirname, '..', 'prebuilds', platformArch)
   const pkg = {
-    name: `@elysiajscppws/${platformArch}`,
+    name: `@cppws/${platformArch}`,
     version: require(path.resolve(__dirname, '..', 'package.json')).version,
-    description: 'Pre-built native binary for elysiajscppws',
+    description: 'Pre-built native binary for cppws',
     os: [extractOS(platformArch)],
     cpu: [extractArch(platformArch)],
     files: ['elysiajscppws_native.node'],
@@ -109,7 +109,7 @@ function createPackageJson(platformArch) {
     license: 'MIT',
   }
   fs.writeFileSync(path.join(destDir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n')
-  console.log(`[prebuild] Created package.json for @elysiajscppws/${platformArch}`)
+  console.log(`[prebuild] Created package.json for @cppws/${platformArch}`)
 }
 
 function extractOS(platformArch) {

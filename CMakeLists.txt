@@ -1,4 +1,15 @@
 cmake_minimum_required(VERSION 3.15)
+
+# Force dynamic CRT (/MD, /MDd) everywhere. vcpkg's x64-windows triplet
+# builds usockets/libuv against the dynamic UCRT (ucrt.lib); if this
+# project's own CRT selection defaults to static (/MT, libucrt.lib)
+# instead, you get missing __imp__ import-thunk symbols (_unlink,
+# _chmod, ...) or, once those libs are forced in, LNK2005 duplicate
+# definitions between libucrt.lib and ucrt.lib. Must be set before
+# project().
+cmake_policy(SET CMP0091 NEW)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+
 project(cppws LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -36,34 +47,63 @@ if(NOT node-addon-api_FOUND)
         "node-addon-api not found. Install it with: npm install node-addon-api")
 endif()
 
-# ── uWebSockets (uSockets) - USE LOCAL COPY ──────────────────────────
-set(USOCKETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/uWebSockets/uSockets")
+# ── uWebSockets (uSockets) ────────────────────────────────────────────
+# Windows: uSockets ships a GNU-style Makefile (wildcard globs, gcc flags
+# like -flto/-std=c11) that MSVC's nmake cannot parse — nmake isn't GNU
+# Make, and cl.exe doesn't accept those flags. There is no working local
+# build path for uSockets on MSVC. Use vcpkg's `usockets` port instead,
+# which builds a proper MSVC-toolchain-compatible static lib.
+# uWebSockets' own headers (App.h etc.) still come from our pinned local
+# clone on every platform, so the API surface stays identical everywhere.
 set(UWS_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/uWebSockets/src")
 
-if(EXISTS "${USOCKETS_DIR}/src/libusockets.h")
-    message(STATUS "Found local uSockets at: ${USOCKETS_DIR}")
-
-    set(USOCKETS_INCLUDE_DIR "${USOCKETS_DIR}/src")
-
-    if(EXISTS "${USOCKETS_DIR}/uSockets.a")
-        set(USOCKETS_LIBRARY "${USOCKETS_DIR}/uSockets.a")
-        message(STATUS "Found uSockets library: ${USOCKETS_LIBRARY}")
-    else()
-        message(FATAL_ERROR "uSockets library not built. Please build it: cd ${USOCKETS_DIR} && make")
+if(WIN32)
+    find_package(unofficial-usockets CONFIG REQUIRED)
+    if(NOT TARGET unofficial::usockets::usockets)
+        message(FATAL_ERROR
+            "vcpkg's usockets port didn't export the expected target "
+            "(unofficial::usockets::usockets). Run: vcpkg install usockets "
+            "and make sure CMAKE_TOOLCHAIN_FILE points at vcpkg.cmake.")
     endif()
-
-    add_library(uSockets STATIC IMPORTED)
-    set_target_properties(uSockets PROPERTIES
-        IMPORTED_LOCATION "${USOCKETS_LIBRARY}"
-        INTERFACE_INCLUDE_DIRECTORIES "${USOCKETS_INCLUDE_DIR}"
-    )
+    add_library(uSockets ALIAS unofficial::usockets::usockets)
     set(UWS_SYSTEM_INSTALL TRUE)
-
+    message(STATUS "Using vcpkg-provided usockets (unofficial::usockets::usockets)")
 else()
-    message(FATAL_ERROR
-        "Local uSockets not found at ${USOCKETS_DIR}. "
-        "Please clone with submodules: git clone --recurse-submodules --depth 1 --branch v20.67.0 https://github.com/uNetworking/uWebSockets.git deps/uWebSockets"
-    )
+    set(USOCKETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/uWebSockets/uSockets")
+
+    if(EXISTS "${USOCKETS_DIR}/src/libusockets.h")
+        message(STATUS "Found local uSockets at: ${USOCKETS_DIR}")
+
+        set(USOCKETS_INCLUDE_DIR "${USOCKETS_DIR}/src")
+
+        if(EXISTS "${USOCKETS_DIR}/uSockets.a")
+            set(USOCKETS_LIBRARY "${USOCKETS_DIR}/uSockets.a")
+            message(STATUS "Found uSockets library: ${USOCKETS_LIBRARY}")
+        else()
+            message(FATAL_ERROR "uSockets library not built. Please build it: cd ${USOCKETS_DIR} && make")
+        endif()
+
+        add_library(uSockets STATIC IMPORTED)
+        set_target_properties(uSockets PROPERTIES
+            IMPORTED_LOCATION "${USOCKETS_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${USOCKETS_INCLUDE_DIR}"
+        )
+        set(UWS_SYSTEM_INSTALL TRUE)
+
+    else()
+        message(FATAL_ERROR
+            "Local uSockets not found at ${USOCKETS_DIR}. "
+            "Please clone with submodules: git clone --recurse-submodules --depth 1 --branch v20.67.0 https://github.com/uNetworking/uWebSockets.git deps/uWebSockets"
+        )
+    endif()
+endif()
+
+# ── zlib (required by uWebSockets for permessage-deflate) ────────────
+# On Linux/macOS zlib usually sneaks in as a transitive dep, but MSVC is
+# strict — nothing is linked implicitly, so we must be explicit on Windows.
+if(WIN32)
+    find_package(ZLIB REQUIRED)
+    message(STATUS "Found zlib: ${ZLIB_LIBRARIES}")
 endif()
 
 # ── OpenSSL (TLS support) ────────────────────────────────────────────
@@ -87,23 +127,31 @@ else()
 endif()
 
 # ── libuv (required by uSockets) ─────────────────────────────────────
+# NOTE: find_package(LibUV) is unreliable across platforms — on macOS,
+# Homebrew's libuv CMake config creates the LibUV::LibUV target but omits
+# IMPORTED_LOCATION, which silently produces LibUV::LibUV-NOTFOUND at link
+# time. We always resolve the library path ourselves and force it onto
+# whatever target exists (or create one), rather than trusting a found
+# package config to have configured itself correctly.
 find_package(LibUV QUIET)
 
-if(NOT LibUV_FOUND)
-    find_path(LIBUV_INCLUDE_DIR NAMES uv.h)
-    find_library(LIBUV_LIBRARY NAMES uv)
+find_path(LIBUV_INCLUDE_DIR NAMES uv.h)
+find_library(LIBUV_LIBRARY NAMES uv libuv)
 
-    if(LIBUV_INCLUDE_DIR AND LIBUV_LIBRARY)
-        set(LibUV_FOUND TRUE)
-        message(STATUS "Found libuv: ${LIBUV_LIBRARY}")
-    else()
-        message(FATAL_ERROR
-            "libuv not found. Install it with your system package manager "
-            "(e.g., apt install libuv1-dev, brew install libuv)")
-    endif()
+if(NOT LIBUV_INCLUDE_DIR OR NOT LIBUV_LIBRARY)
+    message(FATAL_ERROR
+        "libuv not found. Install it with your system package manager "
+        "(e.g., apt install libuv1-dev, brew install libuv, vcpkg install libuv)")
 endif()
 
-if(LibUV_FOUND AND NOT TARGET LibUV::LibUV)
+message(STATUS "Found libuv: ${LIBUV_LIBRARY}")
+
+if(TARGET LibUV::LibUV)
+    set_target_properties(LibUV::LibUV PROPERTIES
+        IMPORTED_LOCATION "${LIBUV_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${LIBUV_INCLUDE_DIR}"
+    )
+else()
     add_library(LibUV::LibUV UNKNOWN IMPORTED)
     set_target_properties(LibUV::LibUV PROPERTIES
         IMPORTED_LOCATION "${LIBUV_LIBRARY}"
@@ -129,6 +177,21 @@ if(OPENSSL_FOUND)
     target_link_libraries(cppws_native PRIVATE ${OPENSSL_LIBRARIES})
     target_include_directories(cppws_native PRIVATE ${OPENSSL_INCLUDE_DIR})
     target_compile_definitions(cppws_native PRIVATE CPPWS_TLS_ENABLED=1)
+endif()
+
+if(WIN32)
+    # node.lib: resolves napi_call_threadsafe_function / napi_release_threadsafe_function
+    # (link-time required on MSVC, unlike Linux/macOS runtime symbol resolution)
+    target_link_libraries(cppws_native PRIVATE ${CMAKE_JS_LIB})
+    # zlib: needed for uWS permessage-deflate (inflate*/deflate* symbols)
+    target_link_libraries(cppws_native PRIVATE ZLIB::ZLIB)
+    # Winsock + CryptoAPI: pulled in transitively on Linux/macOS but
+    # must be explicit with MSVC
+    target_link_libraries(cppws_native PRIVATE ws2_32 crypt32)
+    # Tell uSockets to use libuv as its event loop backend (suppresses
+    # the Unix-domain-socket POSIX code that emits __imp__unlink /
+    # __imp__chmod on Windows)
+    target_compile_definitions(cppws_native PRIVATE LIBUS_USE_LIBUV=1)
 endif()
 
 if(UNIX AND NOT APPLE)

@@ -590,6 +590,14 @@ std::string WebSocketServer::generateConnectionId() {
 void WebSocketServer::registerCallbacks(const Napi::CallbackInfo& info) {
     LOG("registerCallbacks called");
     Napi::Env env = info.Env();
+
+    if (running_) {
+        LOG("registerCallbacks rejected — server is running");
+        Napi::Error::New(env, "Cannot reconfigure callbacks while server is running")
+            .ThrowAsJavaScriptException();
+        return;
+    }
+
     if (info.Length() == 0 || !info[0].IsObject()) {
         LOG("no options object, returning");
         return;
@@ -850,9 +858,9 @@ void WebSocketServer::runServer() {
 
     app->ws<PerSocketData>("/*", {
         .compression      = compressionEnabled ? uWS::SHARED_COMPRESSOR : uWS::DISABLED,
-        .maxPayloadLength = maxPayload,
-        .idleTimeout      = static_cast<int32_t>(idleTimeout),
-        .maxBackpressure  = static_cast<uint32_t>(hwm),
+        .maxPayloadLength = static_cast<unsigned int>(maxPayload),
+        .idleTimeout      = static_cast<unsigned short>(idleTimeout),
+        .maxBackpressure  = static_cast<unsigned int>(hwm),
 
         .upgrade = [self](auto* res, auto* req, auto* context) {
             LOG("upgrade callback entered");
