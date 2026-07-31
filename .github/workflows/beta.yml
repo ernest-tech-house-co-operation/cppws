@@ -105,7 +105,7 @@ jobs:
       - name: Publish platform binary packages (@cppws/*)
         run: |
           for dir in prebuilds/*/; do
-            name=$(node -p "require('${dir}package.json').name")
+            name=$(node -p "require('./${dir}package.json').name")
             echo "Publishing $name@$BETA_VERSION..."
             (cd "$dir" && npm publish --tag beta --access public)
           done
