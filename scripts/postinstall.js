@@ -34,15 +34,15 @@ function getPlatformArch() {
 function main() {
   const platformArch = getPlatformArch()
   const prebuildDir = path.join(__dirname, '..', 'prebuilds', platformArch)
-  const binaryPath = path.join(prebuildDir, 'elysiajscppws_native.node')
+  const binaryPath = path.join(prebuildDir, 'cppws_native.node')
 
   if (fs.existsSync(binaryPath)) {
-    console.log(`[elysiajscppws] Pre-built binary found for ${platformArch}`)
+    console.log(`[cppws] Pre-built binary found for ${platformArch}`)
   } else {
     // Not an error — the native-loader will fall back to the JS mock.
     // The user can compile from source with: npm run build:cpp
     console.log(
-      `[elysiajscppws] No pre-built binary for ${platformArch}. ` +
+      `[cppws] No pre-built binary for ${platformArch}. ` +
       `The plugin will use a pure-JS fallback at runtime. ` +
       `Run "npm run build:cpp" to compile from source.`
     )
