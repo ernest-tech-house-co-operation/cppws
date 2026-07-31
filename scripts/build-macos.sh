@@ -49,7 +49,11 @@ echo "[build-macos] Building uSockets.a..."
 make -C deps/uWebSockets/uSockets
 
 echo "[build-macos] Installing npm dependencies..."
-npm install
+# CPPWS_SKIP_DOWNLOAD: this script's whole job is to compile the binary
+# from source, so postinstall.js has nothing to download yet (the release
+# for this version may not even exist). Without this, npm install fails
+# the entire build on a 404.
+CPPWS_SKIP_DOWNLOAD=1 npm install
 
 echo "[build-macos] Compiling native addon..."
 npm run build:cpp -- $RELEASE_FLAG

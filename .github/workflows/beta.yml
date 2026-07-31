@@ -1,8 +1,9 @@
 name: Beta / Prerelease (beta)
 
-# Every push to `beta` produces a prerelease build tagged with the commit
-# short SHA, published to npm under the `beta` dist-tag. Does not touch
-# the `latest` dist-tag used by master releases.
+# Every push to `beta` produces a prerelease build tagged
+# v<version>-beta.<short-sha>.<run-number>, published to npm under the
+# `beta` dist-tag. Binaries go to a matching GitHub prerelease. Does not
+# touch the `latest` dist-tag used by master releases.
 
 on:
   push:
@@ -28,12 +29,23 @@ jobs:
           - os: windows-latest
             target: win32-x64-msvc
     runs-on: ${{ matrix.os }}
+    outputs:
+      beta_version: ${{ steps.version.outputs.beta_version }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      - name: Compute beta version
+        id: version
+        shell: bash
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          BASE_VERSION=$(node -p "require('./package.json').version")
+          BETA_VERSION="${BASE_VERSION}-beta.${SHORT_SHA}.${{ github.run_number }}"
+          echo "beta_version=${BETA_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Install cmake (Linux)
         if: runner.os == 'Linux'
@@ -66,17 +78,25 @@ jobs:
         shell: pwsh
         run: Write-Host "Skipping integration tests on Windows -- known intermittent native-thread timing issue, see README > Known Issues."
 
-      - name: Stage prebuilt binary
+      - name: Stage + pack prebuilt binary
+        env:
+          CPPWS_SKIP_DOWNLOAD: "1"
         run: node scripts/prebuild.js --pack
 
+      # NOTE: the tarball keeps its plain name (cppws-native-<target>.tar.gz).
+      # postinstall.js always requests that exact filename — versioning
+      # comes from which release tag it's attached to (v<beta_version>),
+      # not from the filename itself.
       - uses: actions/upload-artifact@v4
         with:
           name: prebuild-${{ matrix.target }}
-          path: prebuilds/
+          path: prebuilds/*/cppws-native-*.tar.gz
 
   publish-beta:
     needs: build-and-test
     runs-on: ubuntu-latest
+    env:
+      BETA_VERSION: ${{ needs.build-and-test.outputs.beta_version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -86,37 +106,21 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          path: prebuilds/
+          path: release-assets/
           merge-multiple: true
 
-      - name: Set prerelease version
-        run: |
-          SHORT_SHA=$(git rev-parse --short HEAD)
-          BASE_VERSION=$(node -p "require('./package.json').version")
-          BETA_VERSION="${BASE_VERSION}-beta.${SHORT_SHA}.${{ github.run_number }}"
-          echo "BETA_VERSION=${BETA_VERSION}" >> "$GITHUB_ENV"
-          npm version "$BETA_VERSION" --no-git-tag-version --allow-same-version
-          for dir in prebuilds/*/; do
-            node -e "
-              const fs = require('fs');
-              const p = '${dir}package.json';
-              const pkg = require('./' + p);
-              pkg.version = '${BETA_VERSION}';
-              fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
-            "
-          done
+      - name: Set prerelease version in package.json
+        run: npm version "$BETA_VERSION" --no-git-tag-version --allow-same-version
 
-      - name: Publish platform binary packages (@cppws/*)
-        run: |
-          for dir in prebuilds/*/; do
-            name=$(node -p "require('./${dir}package.json').name")
-            echo "Publishing $name@$BETA_VERSION..."
-            (cd "$dir" && npm publish --tag beta --access public)
-          done
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Create GitHub prerelease with binary tarballs
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.BETA_VERSION }}
+          prerelease: true
+          generate_release_notes: true
+          files: release-assets/*.tar.gz
 
-      - name: Publish main package to npm
+      - name: Publish JS package to npm under beta tag
         run: npm publish --tag beta --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

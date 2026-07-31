@@ -1,8 +1,18 @@
 name: Release (master)
 
 # Triggered by a push or merged PR into master.
-# Builds native binaries for every supported target, runs the full test
-# suite, then publishes an official release to npm + GitHub Releases.
+#
+# There is exactly ONE version number in this project: package.json's
+# "version". Everything else derives from it:
+#   - the GitHub Release is tagged v<version>
+#   - the binary tarballs uploaded to that release are named
+#     cppws-native-<target>.tar.gz (see scripts/prebuild.js)
+#   - npm publishes the JS package under that same version
+#   - postinstall.js downloads from the release tagged v<version>
+#
+# npm never sees a compiled binary and never publishes a platform
+# package — only the JS side goes to npm. Binaries live on GitHub
+# Releases and are fetched by postinstall.js at install time.
 
 on:
   push:
@@ -62,13 +72,17 @@ jobs:
         shell: pwsh
         run: Write-Host "Skipping integration tests on Windows -- known intermittent native-thread timing issue, see README > Known Issues."
 
-      - name: Stage prebuilt binary
+      - name: Stage + pack prebuilt binary
+        env:
+          CPPWS_SKIP_DOWNLOAD: "1" # this is the build job, not an npm install
         run: node scripts/prebuild.js --pack
 
       - uses: actions/upload-artifact@v4
         with:
           name: prebuild-${{ matrix.target }}
-          path: prebuilds/
+          # Only the tarball is needed downstream — the raw .node file
+          # doesn't need to travel between jobs.
+          path: prebuilds/*/cppws-native-*.tar.gz
 
   publish:
     needs: build-and-test
@@ -82,26 +96,21 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          path: prebuilds/
+          path: release-assets/
           merge-multiple: true
 
-      - name: Publish platform binary packages (@cppws/*)
-        run: |
-          for dir in prebuilds/*/; do
-            name=$(node -p "require('./${dir}package.json').name")
-            echo "Publishing $name..."
-            (cd "$dir" && npm publish --access public)
-          done
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Read version
+        id: pkg
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
-      - name: Publish main package to npm
+      - name: Create GitHub Release with binary tarballs
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.pkg.outputs.version }}
+          generate_release_notes: true
+          files: release-assets/*.tar.gz
+
+      - name: Publish JS package to npm (no binaries)
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: prebuilds/**/*
