@@ -1,11 +1,10 @@
-import { createRequire } from 'module';
 import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
 import logger from 'ernest-logger';
 
-const nativeRequire = createRequire(import.meta.url);
-const __filename    = fileURLToPath(import.meta.url);
-const __dirname     = dirname(__filename);
+// __filename / __dirname / require are ambient CommonJS globals — no need
+// for createRequire(import.meta.url) / fileURLToPath, which are ESM-only
+// and don't exist in the CommonJS output this package builds to.
+const nativeRequire = require;
 
 // ── Runtime detection ─────────────────────────────────────────
 
