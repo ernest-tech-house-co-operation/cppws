@@ -30,15 +30,27 @@
     "prepublishOnly": "npm run clean && npm run build"
   },
   "keywords": [
-    "websocket", "ws", "cpp", "uwebsockets", "real-time", "bun", "node",
-    "deno", "runtime-agnostic", "framework-agnostic", "elysia", "express",
-    "hono", "fastify", "cppws"
+    "websocket",
+    "ws",
+    "cpp",
+    "uwebsockets",
+    "real-time",
+    "bun",
+    "node",
+    "deno",
+    "runtime-agnostic",
+    "framework-agnostic",
+    "elysia",
+    "express",
+    "hono",
+    "fastify",
+    "cppws"
   ],
   "author": "Ernest Tech House",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Ernest12287/cppws"
+    "url": "git+https://github.com/ernest-tech-house-co-operation/cppws.git"
   },
   "dependencies": {
     "ernest-logger": ">=2.0.0",
