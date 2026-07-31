@@ -28,6 +28,11 @@
 ---
 ## NOTE
  Notice: never call `process.exit()` (or anything that triggers process teardown) synchronously inside a native callback — `onmessage`, `onOpen`, `onClose`, any TSFN-driven handler. Those callbacks execute *during* an N-API `NonBlockingCall` invocation, still on the call stack that the C++ thread is waiting on. `process.exit()` forces immediate native cleanup (your destructor), which tries to `join()` the same uWS thread that's mid-callback — that's a self-join, and the runtime throws `Resource deadlock avoided` and aborts instead of failing gracefully. Always defer exit/shutdown logic out of the callback with `setImmediate`/`queueMicrotask` so the native thread finishes its call and returns control to JS first — this rule applies anywhere you tear down the process or the server, not just in tests.
+
+## Note: Windows test suite error
+so windows test suite error is abit funny to me in my looking why allow me to explain ok, when we maked one commit tothe test build branch the nig ts test filepasses with absaloutly no error yey now when we just now make another push to the branch it fails this time so am like bro you worked 3 minutes ago, and cppws needs to be released my tiniest of gueses is race conditions the real source of the problem i have no idea race conditions is just a probability. when you get a funny error most likely in broadcasting to rooms pub sub calls it will work on minute one and fail on minute two. i am urgin devs to assist with further testing to help pinpont with the peroblem. 
+We will investigte the issue
+The library works on windows yes it is just a tiny weee funky thanks.
  
 ## Note: always buffer WebSocket test-client messages from socket creation, not from first read.
 If your test harness does `new WebSocket(url)` and only attaches `.onmessage` later (e.g. inside a `nextMessage()` helper called after `await open`), you're gambling on a race: if the server responds before that listener gets attached, the message fires into a `null` handler and is **gone forever** — no error, no queue, nothing to catch. WebSockets don't replay missed events.
