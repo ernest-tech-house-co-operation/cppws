@@ -881,7 +881,8 @@ async function testMessageBatcher(): Promise<void> {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  Section 14 — Graceful shutdown (must run last — shuts the main server down)
+//  Section 14 — Graceful shutdown (frees the singleton for isolated-port
+//  tests that run after it — see run())
 // ══════════════════════════════════════════════════════════════════════════
 
 async function testGracefulShutdown(): Promise<void> {
@@ -932,17 +933,30 @@ async function run(): Promise<void> {
         await testConnectionInfo();
         await testHistory();
         await testMetrics();
-        await testRateLimit();
-        await testEventEmitter();
-        await testMessageBatcher();
 
-        await testGracefulShutdown(); // must be last — shuts main server down
+        // Main server must be stopped before any test that starts its own
+        // server on a different port — the native core is a process-wide
+        // singleton, so two "servers" can never be running at once.
+        await testGracefulShutdown();
     } catch (err) {
         logger.error(`Unexpected test error: ${err}`);
         failed++;
         // Best-effort cleanup so a thrown error never leaves a dangling server.
         await safeShutdown(server).catch(() => {});
         server = null;
+    }
+
+    // Each of these starts its own isolated-port server. Run them
+    // independently so one section's failure doesn't hide the others —
+    // this used to all live inside the block above, where a single throw
+    // from testRateLimit silently skipped everything after it.
+    for (const step of [testRateLimit, testMessageBatcher, testEventEmitter]) {
+        try {
+            await step();
+        } catch (err) {
+            logger.error(`Unexpected test error in ${step.name}: ${err}`);
+            failed++;
+        }
     }
 
     logger.info('\n══════════════════════════════════════════════════════');
