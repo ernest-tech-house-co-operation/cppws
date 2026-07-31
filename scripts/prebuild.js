@@ -3,55 +3,22 @@
 //
 // Usage:
 //   node scripts/prebuild.js              # build for current platform
-//   node scripts/prebuild.js --pack       # also create a publishable tarball
-//   node scripts/prebuild.js --all        # (CI) build for all 8 platform targets
+//   node scripts/prebuild.js --pack       # also create the tarball CI uploads to the GitHub Release
 //
-// The compiled .node file is placed in:
+// Output:
 //   prebuilds/<platform-arch>/cppws_native.node
+//   prebuilds/<platform-arch>/cppws-native-<platform-arch>.tar.gz   (with --pack)
 //
-// When --pack is used, a tarball is created at:
-//   prebuilds/<platform-arch>/cppws_native.tar.gz
+// The tarball name/contents must match what scripts/postinstall.js downloads
+// and extracts — see SUPPORTED_TARGETS in scripts/platform.js.
 
 'use strict'
 
 const fs = require('fs')
 const path = require('path')
 const { execSync } = require('child_process')
-const { platform, arch } = process
-
-// ── Platform detection ──────────────────────────────────────────────────
-
-function detectLibc() {
-  if (platform !== 'linux') return null
-  try {
-    const report = fs.readFileSync('/usr/bin/ldd', 'utf8')
-    return report.includes('musl') ? 'musl' : 'gnu'
-  } catch {
-    return null
-  }
-}
-
-function getPlatformArch() {
-  const libc = detectLibc()
-  if (platform === 'win32') return `${platform}-${arch}-msvc`
-  if (libc) return `${platform}-${arch}-${libc}`
-  return `${platform}-${arch}`
-}
-
-// ── All supported targets (for CI matrix builds) ────────────────────────
-
-const ALL_TARGETS = [
-  'darwin-arm64',
-  'darwin-x64',
-  'linux-x64-gnu',
-  'linux-x64-musl',
-  'linux-arm64-gnu',
-  'linux-arm64-musl',
-  'win32-x64-msvc',
-  'win32-arm64-msvc',
-]
-
-// ── Build ──────────────────────────────────────────────────────────────
+const { platform } = process
+const { getPlatformArch, SUPPORTED_TARGETS } = require('./platform.js')
 
 function buildRelease() {
   console.log('[prebuild] Compiling C++ addon in Release mode...')
@@ -96,117 +63,49 @@ function stageBinary(platformArch) {
   console.log(`[prebuild] Staged ${platformArch}/cppws_native.node (${kb} KB)`)
 }
 
-function createPackageJson(platformArch) {
-  const destDir = path.resolve(__dirname, '..', 'prebuilds', platformArch)
-  const pkg = {
-    name: `@cppws/${platformArch}`,
-    version: require(path.resolve(__dirname, '..', 'package.json')).version,
-    description: 'Pre-built native binary for cppws',
-    os: [extractOS(platformArch)],
-    cpu: [extractArch(platformArch)],
-    files: ['cppws_native.node'],
-    repository: {
-      type: 'git',
-      url: 'https://github.com/Ernest12287/elysiajscppws.git',
-      directory: `prebuilds/${platformArch}`,
-    },
-    license: 'MIT',
-  }
-  fs.writeFileSync(path.join(destDir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n')
-  console.log(`[prebuild] Created package.json for @cppws/${platformArch}`)
-}
-
-function extractOS(platformArch) {
-  if (platformArch.startsWith('win32')) return 'win32'
-  if (platformArch.startsWith('darwin')) return 'darwin'
-  return 'linux'
-}
-
-function extractArch(platformArch) {
-  // e.g. "linux-x64-gnu" → "x64", "win32-arm64-msvc" → "arm64"
-  const parts = platformArch.split('-')
-  return parts[1]
-}
-
 function packTarball(platformArch) {
   const destDir = path.resolve(__dirname, '..', 'prebuilds', platformArch)
-  const tarball = path.join(destDir, 'cppws_native.tar.gz')
+  // Filename must match what postinstall.js requests from the GitHub Release.
+  const tarball = path.join(destDir, `cppws-native-${platformArch}.tar.gz`)
 
-  // Use tar if available (Linux/macOS), skip on Windows (user can zip manually)
   if (platform === 'win32') {
-    console.log(`[prebuild] Skipping tarball creation on Windows.`)
-    console.log(`[prebuild] Manually zip: ${destDir}/`)
-    return
+    // bsdtar ships with Windows 10 1803+ / Server 2019+, same as CI runners.
+    execSync(`tar -czf "${tarball}" -C "${destDir}" cppws_native.node`, { stdio: 'inherit' })
+  } else {
+    execSync(`tar -czf "${tarball}" -C "${destDir}" cppws_native.node`, { stdio: 'inherit' })
   }
-
-  console.log(`[prebuild] Creating tarball...`)
-  execSync(`tar -czf ${tarball} -C ${destDir} cppws_native.node package.json`, {
-    stdio: 'inherit',
-  })
   const stats = fs.statSync(tarball)
   const kb = (stats.size / 1024).toFixed(1)
   console.log(`[prebuild] Created ${tarball} (${kb} KB)`)
 }
 
-// ── Main ───────────────────────────────────────────────────────────────
-
 function main() {
   const args = process.argv.slice(2)
   const doPack = args.includes('--pack')
-  const doAll = args.includes('--all')
-
-  if (doAll) {
-    console.log('[prebuild] ═══════════════════════════════════════════')
-    console.log('[prebuild]  Cross-compilation for all targets is not')
-    console.log('[prebuild]  supported by this script. Use a CI matrix')
-    console.log('[prebuild]  (GitHub Actions) where each job runs on')
-    console.log('[prebuild]  the actual target OS/arch and calls:')
-    console.log('[prebuild]    node scripts/prebuild.js [--pack]')
-    console.log('[prebuild] ═══════════════════════════════════════════')
-    console.log()
-    console.log('Targets to cover in CI:')
-    for (const t of ALL_TARGETS) {
-      console.log(`  - ${t}`)
-    }
-    console.log()
-    console.log('Example GitHub Actions step:')
-    console.log(`
-  - name: Prebuild native addon
-    run: node scripts/prebuild.js --pack
-  - name: Upload artifact
-    uses: actions/upload-artifact@v4
-    with:
-      name: prebuild-\${{ matrix.platform }}
-      path: prebuilds/
-`)
-    process.exit(0)
-  }
 
   const platformArch = getPlatformArch()
   console.log(`[prebuild] Platform: ${platformArch}`)
   console.log(`[prebuild] Node: ${process.version}`)
+  if (!SUPPORTED_TARGETS.includes(platformArch)) {
+    console.log(
+      `[prebuild] NOTE: "${platformArch}" is not in SUPPORTED_TARGETS (scripts/platform.js).\n` +
+        `[prebuild] The binary will build fine locally, but postinstall.js won't know to fetch it\n` +
+        `[prebuild] for this target until it's added there and to the CI matrix.`
+    )
+  }
   console.log()
 
-  // 1. Compile
   buildRelease()
-
-  // 2. Stage into prebuilds/<platform-arch>/
   stageBinary(platformArch)
-
-  // 3. Create a minimal package.json for the platform package
-  createPackageJson(platformArch)
-
-  // 4. Optionally create a tarball
-  if (doPack) {
-    packTarball(platformArch)
-  }
+  if (doPack) packTarball(platformArch)
 
   console.log()
   console.log('[prebuild] Done. Binary is at:')
   console.log(`  prebuilds/${platformArch}/cppws_native.node`)
-  console.log()
-  console.log('[prebuild] To publish this platform package:')
-  console.log(`  cd prebuilds/${platformArch} && npm publish --access public`)
+  if (doPack) {
+    console.log('[prebuild] Tarball ready for GitHub Release upload:')
+    console.log(`  prebuilds/${platformArch}/cppws-native-${platformArch}.tar.gz`)
+  }
 }
 
 main()

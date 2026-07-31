@@ -17,34 +17,6 @@ function detectRuntime(): Runtime {
     return 'node';
 }
 
-function getPlatformTag(runtime: Runtime): string {
-    const platform = process.platform;
-    const arch     = process.arch;
-
-    let libc = '';
-    if (platform === 'linux' && runtime !== 'deno') {
-        libc = detectLibc();
-    }
-    const libcSuffix = libc ? `-${libc}` : '';
-
-    switch (runtime) {
-        case 'bun': {
-            const bunMajor = parseInt(
-                ((globalThis as any).Bun?.version ?? '1').split('.')[0], 10);
-            return `bun-${bunMajor}-${platform}-${arch}${libcSuffix}`;
-        }
-        case 'deno': {
-            const denoMajor = parseInt(
-                ((globalThis as any).Deno?.version?.deno ?? '1').split('.')[0], 10);
-            return `deno-${denoMajor}-${platform}-${arch}`;
-        }
-        default: {
-            const napiVer = (process.versions as any).napi ?? '8';
-            return `node-${napiVer}-${platform}-${arch}${libcSuffix}`;
-        }
-    }
-}
-
 function detectLibc(): string {
     if (process.platform !== 'linux') return '';
     try {
@@ -54,6 +26,11 @@ function detectLibc(): string {
     } catch {
         return '';
     }
+}
+
+function getPlainPlatformTag(): string {
+    const libc = process.platform === 'linux' ? detectLibc() : '';
+    return `${process.platform}-${process.arch}${libc ? `-${libc}` : ''}`;
 }
 
 function findProjectRoot(startDir: string): string {
@@ -101,217 +78,38 @@ function unwrapAddon(raw: unknown, tag: string): Record<string, (...args: any[])
     return null;
 }
 
+/**
+ * Tries every known location for the compiled addon, in order:
+ *  1. prebuilds/<platform-arch> — staged by postinstall.js (the normal path for consumers)
+ *  2. build/Release, build/Debug — a local `npm run build:cpp` (contributor / from-source path)
+ *
+ * Deno doesn't support native addons, so build/* is skipped there.
+ */
 function loadNativeAddon(runtime: Runtime): Record<string, (...args: any[]) => any> | null {
-    // Updated addon name: cppws_native.node
     const addonName = 'cppws_native.node';
+    const attempted: string[] = [];
 
-    // Strategy 1: runtime-aware prebuild (e.g. bun-1-linux-x64-gnu)
-    const runtimeTag = getPlatformTag(runtime);
-    const s1 = unwrapAddon(
-        tryLoadModule(join(PROJECT_ROOT, 'prebuilds', runtimeTag, addonName)),
-        runtimeTag,
-    );
+    const plainTag = getPlainPlatformTag();
+    const s1Path = join(PROJECT_ROOT, 'prebuilds', plainTag, addonName);
+    attempted.push(s1Path);
+    const s1 = unwrapAddon(tryLoadModule(s1Path), plainTag);
     if (s1) return s1;
 
-    // Strategy 2: plain platform tag (e.g. linux-x64-gnu)
-    const libc     = process.platform === 'linux' ? detectLibc() : '';
-    const plainTag = `${process.platform}-${process.arch}${libc ? `-${libc}` : ''}`;
-    const s2 = unwrapAddon(
-        tryLoadModule(join(PROJECT_ROOT, 'prebuilds', plainTag, addonName)),
-        plainTag,
-    );
-    if (s2) return s2;
-
-    // Strategy 3 & 4: cmake-js local build
     if (runtime !== 'deno') {
-        const s3 = unwrapAddon(
-            tryLoadModule(join(PROJECT_ROOT, 'build', 'Release', addonName)),
-            'build/Release',
-        );
-        if (s3) return s3;
+        const s2Path = join(PROJECT_ROOT, 'build', 'Release', addonName);
+        attempted.push(s2Path);
+        const s2 = unwrapAddon(tryLoadModule(s2Path), 'build/Release');
+        if (s2) return s2;
 
-        const s4 = unwrapAddon(
-            tryLoadModule(join(PROJECT_ROOT, 'build', 'Debug', addonName)),
-            'build/Debug',
-        );
-        if (s4) return s4;
+        const s3Path = join(PROJECT_ROOT, 'build', 'Debug', addonName);
+        attempted.push(s3Path);
+        const s3 = unwrapAddon(tryLoadModule(s3Path), 'build/Debug');
+        if (s3) return s3;
     }
 
+    logger.error('[native-loader] No native addon found. Looked in:');
+    for (const p of attempted) logger.error(`  - ${p}`);
     return null;
-}
-
-// ── Pure-JS mock fallback ─────────────────────────────────────
-
-function createJSMock(): Record<string, (...args: any[]) => any> {
-    const runtime = detectRuntime();
-    logger.warn(`[native-loader] No native addon found (runtime: ${runtime}). Running in pure-JS mock mode.`);
-    logger.warn('[native-loader] Performance will be degraded. Run "npm run build:cpp" for full speed.');
-
-    const connections = new Map<string, any>();
-    const userMap     = new Map<string, string>();
-    const rooms       = new Map<string, Set<string>>();
-    const connRooms   = new Map<string, Set<string>>();
-    const history     = new Map<string, Array<{
-        room: string; message: string; timestamp: number; messageId: string;
-    }>>();
-
-    const metrics = {
-        totalConnections:      0,
-        activeConnections:     0,
-        totalMessagesReceived: 0,
-        totalMessagesSent:     0,
-        totalBytesReceived:    0,
-        totalBytesSent:        0,
-        droppedMessages:       0,
-        rejectedConnections:   0,
-    };
-
-    let startedAt  = 0;
-    let running    = false;
-
-    // Stored callbacks set via configure()
-    let _onOpen:    ((data: any) => void) | undefined;
-    let _onMessage: ((data: any) => void) | undefined;
-    let _onClose:   ((data: any) => void) | undefined;
-    let _onDrain:   ((data: any) => void) | undefined;
-
-    return {
-        configure(opts: Record<string, any>) {
-            if (typeof opts.onOpen    === 'function') _onOpen    = opts.onOpen;
-            if (typeof opts.onMessage === 'function') _onMessage = opts.onMessage;
-            if (typeof opts.onClose   === 'function') _onClose   = opts.onClose;
-            if (typeof opts.onDrain   === 'function') _onDrain   = opts.onDrain;
-            logger.info('[JS mock] configured');
-            return true;
-        },
-
-        start() {
-            running   = true;
-            startedAt = Date.now();
-            logger.info('[JS mock] server started');
-            return true;
-        },
-
-        stop() {
-            running = false;
-            logger.info('[JS mock] server stopped');
-            return true;
-        },
-
-        isRunning() { return running; },
-
-        // ── Room ops ─────────────────────────────────────────────
-        joinRoom(connId: string, room: string) {
-            if (!rooms.has(room))       rooms.set(room, new Set());
-            if (!connRooms.has(connId)) connRooms.set(connId, new Set());
-            rooms.get(room)!.add(connId);
-            connRooms.get(connId)!.add(room);
-        },
-
-        leaveRoom(connId: string, room: string) {
-            rooms.get(room)?.delete(connId);
-            connRooms.get(connId)?.delete(room);
-        },
-
-        broadcastToRoom(room: string, message: string) {
-            const members = rooms.get(room);
-            if (members) {
-                metrics.totalMessagesSent += members.size;
-                for (const cid of members) {
-                    const conn = connections.get(cid);
-                    if (conn?.sendFn) conn.sendFn(message);
-                    // Also fire onMessage callback so the JS layer sees it
-                    if (_onMessage) _onMessage({ connectionId: cid, data: message });
-                }
-            }
-            if (!history.has(room)) history.set(room, []);
-            const entries = history.get(room)!;
-            entries.push({ room, message, timestamp: Date.now(), messageId: `mock-${Date.now()}` });
-            if (entries.length > 100) entries.shift();
-        },
-
-        getRoomInfo(room: string) {
-            const members = rooms.get(room);
-            return {
-                name:        room,
-                size:        members?.size ?? 0,
-                connections: members ? [...members] : [],
-            };
-        },
-
-        // ── Direct send ──────────────────────────────────────────
-        sendToConnection(connId: string, message: string) {
-            const conn = connections.get(connId);
-            if (conn?.sendFn) {
-                conn.sendFn(message);
-                metrics.totalMessagesSent++;
-                return true;
-            }
-            return false;
-        },
-
-        sendToUser(userId: string, message: string) {
-            const connId = userMap.get(userId);
-            if (connId) {
-                const conn = connections.get(connId);
-                if (conn?.sendFn) {
-                    conn.sendFn(message);
-                    metrics.totalMessagesSent++;
-                    return true;
-                }
-            }
-            return false;
-        },
-
-        // ── Connection management ────────────────────────────────
-        disconnect(connId: string) {
-            const conn = connections.get(connId);
-            if (conn) {
-                connections.delete(connId);
-                const cr = connRooms.get(connId);
-                if (cr) {
-                    for (const room of cr) rooms.get(room)?.delete(connId);
-                    connRooms.delete(connId);
-                }
-                metrics.activeConnections = Math.max(0, metrics.activeConnections - 1);
-                if (_onClose) _onClose({ connectionId: connId, code: 1000, reason: 'disconnected' });
-            }
-        },
-
-        getConnectionCount() { return connections.size; },
-
-        getConnectionInfo(connId: string) {
-            const conn = connections.get(connId);
-            if (!conn) return null;
-            return { ...conn.info, rooms: [...(connRooms.get(connId) ?? [])] };
-        },
-
-        // ── Metrics ──────────────────────────────────────────────
-        getMetrics() {
-            return { ...metrics, uptimeMs: running ? Date.now() - startedAt : 0 };
-        },
-
-        // ── History ──────────────────────────────────────────────
-        getHistory(room: string, sinceTimestamp?: number) {
-            const entries = history.get(room) ?? [];
-            return sinceTimestamp !== undefined
-                ? entries.filter(e => e.timestamp >= sinceTimestamp)
-                : entries;
-        },
-
-        // ── Test helpers ─────────────────────────────────────────
-        _mockAddConnection(
-            connId: string,
-            info: Record<string, any>,
-            sendFn: (msg: string) => void,
-        ) {
-            connections.set(connId, { info, sendFn });
-            metrics.totalConnections++;
-            metrics.activeConnections++;
-            // Fire onOpen so WebSocketServer builds a WSContext for this mock conn
-            if (_onOpen) _onOpen({ connectionId: connId, ip: info.ip ?? 'mock', path: '/' });
-        },
-    };
 }
 
 // ── Public API ────────────────────────────────────────────────
@@ -319,8 +117,12 @@ function createJSMock(): Record<string, (...args: any[]) => any> {
 let cachedNative: Record<string, (...args: any[]) => any> | null = null;
 
 /**
- * Load and cache the native C++ addon (or JS mock fallback).
- * Runtime agnostic: Node.js, Bun, Deno.
+ * Load and cache the native C++ addon. Node.js, Bun, and Deno are all
+ * supported at runtime.
+ *
+ * There is no JS fallback: if the compiled addon can't be found, this
+ * throws immediately with instructions rather than silently degrading
+ * to slower emulated behavior.
  */
 export function loadNative(): Record<string, (...args: any[]) => any> {
     if (cachedNative) return cachedNative;
@@ -328,16 +130,29 @@ export function loadNative(): Record<string, (...args: any[]) => any> {
     const runtime = detectRuntime();
     logger.info(`[native-loader] Detected runtime: ${runtime}`);
 
-    const addon  = loadNativeAddon(runtime);
-    cachedNative = addon ?? createJSMock();
+    const addon = loadNativeAddon(runtime);
+    if (!addon) {
+        throw new Error(
+            '[cppws] Native addon not found.\n' +
+            '  If you installed via npm, postinstall should have downloaded it —\n' +
+            '  try reinstalling: npm install cppws --force\n' +
+            '  If you are building from source: npm run build:cpp\n' +
+            '  See https://github.com/ernest-tech-house-co-operation/cppws for supported platforms.'
+        );
+    }
+
+    cachedNative = addon;
     return cachedNative;
 }
 
 /**
- * Returns true if the real C++ addon is loaded (vs the JS mock).
+ * Always true now that the JS mock has been removed — loadNative() throws
+ * instead of ever returning a non-native implementation. Kept for API
+ * compatibility with existing callers.
  */
 export function isNativeLoaded(): boolean {
-    return !('_mockAddConnection' in loadNative());
+    loadNative();
+    return true;
 }
 
 /**

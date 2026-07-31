@@ -30,21 +30,9 @@
     "prepublishOnly": "npm run clean && npm run build"
   },
   "keywords": [
-    "websocket",
-    "ws",
-    "cpp",
-    "uwebsockets",
-    "real-time",
-    "bun",
-    "node",
-    "deno",
-    "runtime-agnostic",
-    "framework-agnostic",
-    "elysia",
-    "express",
-    "hono",
-    "fastify",
-    "cppws"
+    "websocket", "ws", "cpp", "uwebsockets", "real-time", "bun", "node",
+    "deno", "runtime-agnostic", "framework-agnostic", "elysia", "express",
+    "hono", "fastify", "cppws"
   ],
   "author": "Ernest Tech House",
   "license": "MIT",
@@ -65,16 +53,6 @@
     "tsc-alias": "^1.8.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
-  },
-  "optionalDependencies": {
-    "@cppws/darwin-arm64": "1.0.0",
-    "@cppws/darwin-x64": "1.0.0",
-    "@cppws/linux-arm64-gnu": "1.0.0",
-    "@cppws/linux-arm64-musl": "1.0.0",
-    "@cppws/linux-x64-gnu": "1.0.0",
-    "@cppws/linux-x64-musl": "1.0.0",
-    "@cppws/win32-arm64-msvc": "1.0.0",
-    "@cppws/win32-x64-msvc": "1.0.0"
   },
   "files": [
     "dist/",

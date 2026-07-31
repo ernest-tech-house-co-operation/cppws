@@ -11,7 +11,7 @@ import type {
     SecurityConfig,
     CompressionConfig,
 } from '../types/index.js';
-import { loadNative, isNativeLoaded } from './native-loader.js';
+import { loadNative } from './native-loader.js';
 import { createWSContext } from './ws-context.js';
 import { RoomManager } from './room-manager.js';
 import { MetricsCollector } from './utils/metrics.js';
@@ -191,8 +191,7 @@ export class WebSocketServer extends TypedEmitter<ServerEvents> {
         this.metricsCollector.start();
 
         logger.success(
-            `WebSocket server started on ${host}:${port} ` +
-            `(native: ${isNativeLoaded() ? 'C++' : 'JS mock'})`
+            `WebSocket server started on ${host}:${port} (native: C++)`
         );
         this.emit('serverStarted', { host, port });
     }
