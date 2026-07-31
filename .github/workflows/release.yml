@@ -87,6 +87,8 @@ jobs:
   publish:
     needs: build-and-test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # required for action-gh-release to create/update releases
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -108,7 +110,7 @@ jobs:
         with:
           tag_name: v${{ steps.pkg.outputs.version }}
           generate_release_notes: true
-          files: release-assets/*.tar.gz
+          files: release-assets/**/*.tar.gz
 
       - name: Publish JS package to npm (no binaries)
         run: npm publish --access public
