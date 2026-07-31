@@ -1,7 +1,7 @@
 // postinstall.js — runs after `npm install`
 //
 // Currently this is a no-op. When pre-built binaries are published to the
-// `@elysiajscppws/<platform-arch>` optional dependency packages, this
+// `@cppws/<platform-arch>` optional dependency packages, this
 // script will verify the correct binary is present in `prebuilds/`.
 //
 // If no binary is found the plugin falls back to a pure-JS mock at
@@ -34,15 +34,15 @@ function getPlatformArch() {
 function main() {
   const platformArch = getPlatformArch()
   const prebuildDir = path.join(__dirname, '..', 'prebuilds', platformArch)
-  const binaryPath = path.join(prebuildDir, 'elysiajscppws_native.node')
+  const binaryPath = path.join(prebuildDir, 'cppws_native.node')
 
   if (fs.existsSync(binaryPath)) {
-    console.log(`[elysiajscppws] Pre-built binary found for ${platformArch}`)
+    console.log(`[cppws] Pre-built binary found for ${platformArch}`)
   } else {
     // Not an error — the native-loader will fall back to the JS mock.
     // The user can compile from source with: npm run build:cpp
     console.log(
-      `[elysiajscppws] No pre-built binary for ${platformArch}. ` +
+      `[cppws] No pre-built binary for ${platformArch}. ` +
       `The plugin will use a pure-JS fallback at runtime. ` +
       `Run "npm run build:cpp" to compile from source.`
     )

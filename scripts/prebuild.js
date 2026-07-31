@@ -7,10 +7,10 @@
 //   node scripts/prebuild.js --all        # (CI) build for all 8 platform targets
 //
 // The compiled .node file is placed in:
-//   prebuilds/<platform-arch>/elysiajscppws_native.node
+//   prebuilds/<platform-arch>/cppws_native.node
 //
 // When --pack is used, a tarball is created at:
-//   prebuilds/<platform-arch>/elysiajscppws_native.tar.gz
+//   prebuilds/<platform-arch>/cppws_native.tar.gz
 
 'use strict'
 
@@ -64,8 +64,12 @@ function buildRelease() {
 
 function findCompiledBinary() {
   const candidates = [
-    path.resolve(__dirname, '..', 'build', 'Release', 'elysiajscppws_native.node'),
-    path.resolve(__dirname, '..', 'build', 'Debug', 'elysiajscppws_native.node'),
+    path.resolve(__dirname, '..', 'build', 'Release', 'cppws_native.node'),
+    path.resolve(__dirname, '..', 'build', 'Debug', 'cppws_native.node'),
+    // Ninja (single-config generator) writes directly to build/, not
+    // build/Release or build/Debug -- this is used on macOS runners
+    // where ninja is auto-selected by cmake-js when available.
+    path.resolve(__dirname, '..', 'build', 'cppws_native.node'),
   ]
   for (const p of candidates) {
     if (fs.existsSync(p)) return p
@@ -76,31 +80,31 @@ function findCompiledBinary() {
 function stageBinary(platformArch) {
   const src = findCompiledBinary()
   if (!src) {
-    console.error('[prebuild] ERROR: Compiled .node file not found in build/Release or build/Debug.')
+    console.error('[prebuild] ERROR: Compiled cppws_native.node not found in build/Release, build/Debug, or build/.')
     console.error('[prebuild] Make sure cmake-js completed successfully.')
     process.exit(1)
   }
 
   const destDir = path.resolve(__dirname, '..', 'prebuilds', platformArch)
-  const dest = path.join(destDir, 'elysiajscppws_native.node')
+  const dest = path.join(destDir, 'cppws_native.node')
 
   fs.mkdirSync(destDir, { recursive: true })
   fs.copyFileSync(src, dest)
 
   const stats = fs.statSync(dest)
   const kb = (stats.size / 1024).toFixed(1)
-  console.log(`[prebuild] Staged ${platformArch}/elysiajscppws_native.node (${kb} KB)`)
+  console.log(`[prebuild] Staged ${platformArch}/cppws_native.node (${kb} KB)`)
 }
 
 function createPackageJson(platformArch) {
   const destDir = path.resolve(__dirname, '..', 'prebuilds', platformArch)
   const pkg = {
-    name: `@elysiajscppws/${platformArch}`,
+    name: `@cppws/${platformArch}`,
     version: require(path.resolve(__dirname, '..', 'package.json')).version,
-    description: 'Pre-built native binary for elysiajscppws',
+    description: 'Pre-built native binary for cppws',
     os: [extractOS(platformArch)],
     cpu: [extractArch(platformArch)],
-    files: ['elysiajscppws_native.node'],
+    files: ['cppws_native.node'],
     repository: {
       type: 'git',
       url: 'https://github.com/Ernest12287/elysiajscppws.git',
@@ -109,7 +113,7 @@ function createPackageJson(platformArch) {
     license: 'MIT',
   }
   fs.writeFileSync(path.join(destDir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n')
-  console.log(`[prebuild] Created package.json for @elysiajscppws/${platformArch}`)
+  console.log(`[prebuild] Created package.json for @cppws/${platformArch}`)
 }
 
 function extractOS(platformArch) {
@@ -126,7 +130,7 @@ function extractArch(platformArch) {
 
 function packTarball(platformArch) {
   const destDir = path.resolve(__dirname, '..', 'prebuilds', platformArch)
-  const tarball = path.join(destDir, 'elysiajscppws_native.tar.gz')
+  const tarball = path.join(destDir, 'cppws_native.tar.gz')
 
   // Use tar if available (Linux/macOS), skip on Windows (user can zip manually)
   if (platform === 'win32') {
@@ -136,7 +140,7 @@ function packTarball(platformArch) {
   }
 
   console.log(`[prebuild] Creating tarball...`)
-  execSync(`tar -czf ${tarball} -C ${destDir} elysiajscppws_native.node package.json`, {
+  execSync(`tar -czf ${tarball} -C ${destDir} cppws_native.node package.json`, {
     stdio: 'inherit',
   })
   const stats = fs.statSync(tarball)
@@ -199,7 +203,7 @@ function main() {
 
   console.log()
   console.log('[prebuild] Done. Binary is at:')
-  console.log(`  prebuilds/${platformArch}/elysiajscppws_native.node`)
+  console.log(`  prebuilds/${platformArch}/cppws_native.node`)
   console.log()
   console.log('[prebuild] To publish this platform package:')
   console.log(`  cd prebuilds/${platformArch} && npm publish --access public`)
