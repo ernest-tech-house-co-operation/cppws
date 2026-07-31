@@ -1,6 +1,6 @@
 {
   "name": "cppws",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "The fastest WebSocket library alive. Runtime-agnostic, high-performance WebSocket server powered by C++ (uWebSockets). Bring your framework — we run alongside it.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
