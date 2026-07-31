@@ -11,6 +11,10 @@ on:
     branches: [beta]
     types: [closed]
 
+concurrency:
+  group: beta-${{ github.sha }}
+  cancel-in-progress: false
+
 jobs:
   build-and-test:
     if: github.event_name == 'push' || github.event.pull_request.merged == true
@@ -89,7 +93,7 @@ jobs:
         run: |
           SHORT_SHA=$(git rev-parse --short HEAD)
           BASE_VERSION=$(node -p "require('./package.json').version")
-          BETA_VERSION="${BASE_VERSION}-beta.${SHORT_SHA}"
+          BETA_VERSION="${BASE_VERSION}-beta.${SHORT_SHA}.${{ github.run_number }}"
           echo "BETA_VERSION=${BETA_VERSION}" >> "$GITHUB_ENV"
           npm version "$BETA_VERSION" --no-git-tag-version --allow-same-version
           for dir in prebuilds/*/; do
